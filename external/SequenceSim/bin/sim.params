@@ -1,0 +1,12 @@
+gain			1.0	e-/ADU
+readout_noise     	10.0   	e-
+scale              	0.27  	pixelscale("/pix)
+zeropoint         	26.5   	conversion:e-/s_to_mag
+seeing             	0.8   	FWHM(arcsec)
+exptime   	 	1.0   	exposuretime(s)
+sky             	0.5   	skybrightness(mag/arcsec**2)
+stars_mag_bright 	0.0   	r magitude of guide stars to simulate 
+stars_mag_faint  	0.0  	r magitude of guide stars to simulate 
+stars_seed   		16	seed for random position & magnitude
+turbulence_sigma 	0.50	(arsec) movement of image center (Gauss sigma)
+sample_freq		1500	number of samples per second to print a star

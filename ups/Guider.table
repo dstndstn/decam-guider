@@ -1,0 +1,6 @@
+setupRequired(SISPIlib)
+setupRequired(SVE)
+#setupRequired(tcltk)
+setupRequired(sextractor)
+pathPrepend(PATH, ${PRODUCT_DIR}/bin)
+pathPrepend(PYTHONPATH, ${PRODUCT_DIR}/python)

@@ -1,0 +1,22 @@
+This package creates sequences of guide images to feed directly to Panview.
+
+
+Content:
+- bin: Contains the python script (guide_mosaic_sim.py), the C binary that simulates the image and a configuration file for C simulator (sim.params)
+- src: Contains the files to compile the C binary (inc. Makefile). There is also a copy of libcfitsio.a, although if it does not match your architecture it will not work and you will have to link yours.
+
+
+Compilation/Installation:
+- To copile the simulate_c.c do make in the src directory. If the link to lincfitsio is set properly, it should work without problems. Once compiled simulate_c at src, you have to copy it to bin/ .
+- The python script needs numpy and pyfits (>v3.0) libraries available.
+
+
+Configuration/Run:
+Change the configuration available at the beginning of guide_mosaic_sim.py. The output directory (where the images and other metadata will be generated) must be updated and other values such as sequence length or bias level can be adjusted.
+To simulate images with just one star in the middle (for StarFinder testing) you have to set stars_mag_bright and stars_mag_faint to 0.0 (as it is now). For regular distribution of stars in the image, stars_mag_faint used to be 23 and stars_mag_bright 16.
+To run the code:
+> python guide_mosaic_sim.py
+
+
+Output:
+In the output directory (configured at guide_mosaic_sim.py), N simulated fits images will be generated with 8 extensions each (guider_sim_seqXX.fits), an ascii file per CCD with the position of the stars at the first image of the sequence (stars_ccdX.dat) and an ascii file with the offset applied in each iteration of the sequence (offsets.dat)
