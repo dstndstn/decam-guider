@@ -5,6 +5,8 @@ import fitsio
 from glob import glob
 from datetime import datetime
 import photutils
+from tractor import (PixPos, Flux, NCircularGaussianPSF, Image, PointSource,
+                     ConstantSky, Tractor)
 
 ## For astrometry.net -- can use the boresight RA,Dec to speed up the solve...
 #> for x in ~/guider/decam-2024-02-28/*_ooi_*; do echo $x; listhead $x | grep EXPNUM; listhead $x | grep 'TEL\(RA\|DEC\)'; done
@@ -89,7 +91,7 @@ def assemble_full_frames(fn):
         #print(imgs[-1].shape)
     return chipnames, imgs
 
-def plot_from_npz(expnum, fn):
+def plot_from_npz(expnum, fn, summary=False):
     print('Reading', fn)
     R = np.load(fn, allow_pickle=True)
     #print('Keys:', R.keys())
@@ -121,13 +123,23 @@ def plot_from_npz(expnum, fn):
     ref_inst = ref_mags - expected_zpt
 
     print('Ref mags:', ', '.join(['%.3g' % m for m in ref_mags]))
-    print('Median inst_mags + clear-sky zeropoint:', np.median(instmags + expected_zpt, axis=1))
-    print('Median mag diffs:',
-          np.median(instmags - ref_inst[np.newaxis,:], axis=1))
+    #print('Median inst_mags + clear-sky zeropoint:', np.median(instmags + expected_zpt, axis=1))
+    #print('Median mag diffs:',
+    #np.median(instmags - ref_inst[np.newaxis,:], axis=1))
 
     transp = 10.**((instmags - ref_inst[np.newaxis, :])/-2.5)
     print('Transparency:', np.median(transp, axis=1))
 
+    d_apflux = apfluxes.copy()
+    d_apflux[1:,:] = np.diff(d_apflux, axis=0)
+    d_apsky = apskies.copy()
+    d_apsky [1:,:] = np.diff(d_apsky , axis=0)
+    d_apflux -= d_apsky
+
+    ap_instmags = -2.5 * np.log10(d_apflux)
+    ap_transp = 10.**((ap_instmags - ref_inst[np.newaxis, :])/-2.5)
+    print('Aperture-flux transparency:', np.median(ap_transp, axis=1))
+    
     gaia_mags = R['gaia_mags']
     g  = gaia_mags[:,0]
     bp = gaia_mags[:,1]
@@ -140,7 +152,7 @@ def plot_from_npz(expnum, fn):
     xys = R['guide_xy']
     yy = [x[1] for x in xys]
 
-    if False:
+    if not summary:
         from astrometry.util.plotutils import PlotSequence
         ps = PlotSequence('guider-exp%i' % expnum)
         ps.skipto(7)
@@ -153,15 +165,33 @@ def plot_from_npz(expnum, fn):
                 sty = ':'
                 ll = ''
             p = plt.plot(100. * transp[:,j], sty, label=chipnames[j] + ll)
+
+            plt.plot(100. * ap_transp[:,j], '--', color=p[0].get_color(),
+                     label=chipnames[j] + ' (aperture)')
             # + ' (G = %.2f, BP-RP = %.2f)' % bprps[j])
         ax = plt.axis()
         plt.legend()
         plt.ylabel('Guide star implied transparency (%)')
         plt.xlabel('Guider frame number')
         plt.title('Transparency (exp %i: %s)' % (expnum, filt))
-        plt.ylim(0, 120)
+        yl,yh = plt.ylim()
+        plt.ylim(0, yh)
+        #plt.ylim(0, 120)
         ps.savefig()
-    
+
+        plt.clf()
+        flux = 10.**(instmags / -2.5)
+
+        for j in range(nguide):
+            p = plt.plot(flux[:,j])
+            c = p[0].get_color()
+            plt.plot(d_apflux[:,j], '--', color=c)
+        plt.ylabel('flux')
+        plt.xlabel('Guider frame number')
+        plt.title('(exp %i: %s)' % (expnum, filt))
+        ps.savefig()
+
+        
     return (ref_mags, transp, (bp-rp), use_for_zpt, instmags, expnum, g, yy,
             apfluxes, apskies)
 
@@ -198,11 +228,13 @@ def main():
                 # arr = arr.tolist()
                 # print('arr:', type(arr), arr.keys())
                 # np.savez(npzfn, **arr)
-                X = plot_from_npz(expnum, npzfn)
+                X = plot_from_npz(expnum, npzfn, summary=False)
                 if X is None:
                     continue
                 for i,xi in enumerate(X):
                     XX[i].append(xi)
+
+        return
 
         nguide = 4
         rr, tt, bb, ii, ee, gg, yy,apff,apss = [],[],[],[], [], [], [], [], []
@@ -455,6 +487,7 @@ def main():
         for i,fn in enumerate(fns):
             roifn = fn.replace('.fits.gz', '_roi.fits.gz')
             if not os.path.exists(roifn):
+                print()
                 print('No such file:', roifn)
                 break
             F = fitsio.FITS(roifn, 'r')
@@ -501,14 +534,15 @@ def main():
                     data = data[25:, :]
                     sky += np.median(data) - bias
                 strip_skies[i, j] = sky/2.
+            print('.', end='')
+            sys.stdout.flush()
+        print()
 
         print('Read', len(gstack), 'guider ROI frames')
 
         if len(gstack) < nframes:
             nframes = len(gstack)
             strip_skies = strip_skies[:nframes, :]
-
-        from tractor import PixPos, Flux, NCircularGaussianPSF, Image, PointSource, ConstantSky, Tractor
 
         # Mask out star pixels before computing median (sky)
         h,w = gstack[0][0].shape
@@ -522,119 +556,100 @@ def main():
         allskies = np.zeros((nframes, nguide), np.float32)
         allparams = np.zeros((nframes, nguide, nparams), np.float32)
         sig1s = np.zeros((nframes, nguide), np.float32)
-
         apfluxes = np.zeros((nframes, nguide), np.float32)
         apskies = np.zeros((nframes, nguide), np.float32)
-        
+
         tractors = []
-        for j,img in enumerate(gstack[0]):
-            # Estimate per-pixel noise via Blanton's 5-pixel MAD
-            step = 3
-            slice1 = (slice(0,-5,step),slice(0,-5,step))
-            slice2 = (slice(5,None,step),slice(5,None,step))
-            mad = np.median(np.abs(img[slice1] - img[slice2]).ravel())
-            sig1 = 1.4826 * mad / np.sqrt(2.)
-        
-            med = np.median(img[starmask])
-            tim = Image(img.copy(), inverr=np.ones_like(img)/sig1, psf=NCircularGaussianPSF([2.], [1.]),
-                        sky=ConstantSky(med))
-            tim.psf.freezeParam('weights')
-            tim.sig1 = sig1
-
-            allskies[0, j] = med
-            sig1s[0, j] = sig1
-            
-            h,w = img.shape
-            flux = np.sum(img) - med * h*w
-            #print('flux estimate:', flux)
-            flux = max(flux, 100)
-            src = PointSource(PixPos(25, 25), Flux(flux))
-            tr = Tractor([tim], [src])
-            #print(tr.getParamNames())
-            mod0 = tr.getModelImage(0)
-            X = tr.optimize_loop()
-            #print('opt results:', X)
-
-            #print('Initial fit params:')
-            #tr.printThawedParams()
-
-            s = tim.psf.getParams()[0]
-            if s < 0:
-                ### Wtf
-                tim.psf.setParams([np.abs(s)])
-                tr.optimize_loop()
-            mod1 = tr.getModelImage(0)
-            tractors.append(tr)
-
-            allparams[0, j, :] = tr.getParams()
-
-        # Initial tractor fits
-        plt.clf()
-        for j,tr in enumerate(tractors):
-            tim = tr.images[0]
-            plt.subplot(4,4, j + 1)
-            plt.imshow(tim.data, interpolation='nearest', origin='lower')
-            plt.title(chipnames[j])
-            plt.subplot(4,4, j + 5)
-            #plt.subplot(3,4, j + 1)
-            med = np.median(tim.data)
-            sig1 = tim.sig1
-            ima = dict(interpolation='nearest', origin='lower', vmin=med-3*sig1, vmax=med+10*sig1)
-            plt.imshow(tim.data, **ima)
-            plt.subplot(4,4, j + 9)
-            #plt.subplot(3,4, j + 5)
-            mod = tr.getModelImage(0)
-            plt.imshow(mod, **ima)
-            #plt.subplot(3,4, j + 9)
-            plt.subplot(4,4, j + 13)
-            plt.imshow((tim.data - mod)/sig1, interpolation='nearest', origin='lower', vmin=-10, vmax=+10)
-        plt.suptitle('Initial tractor fits')
-        ps.savefig()
+        init_tractor_plot = []
 
         for i,gims in enumerate(gstack):
-            if i == 0:
-                continue
-            for j,(tr,im) in enumerate(zip(tractors,gims)):
-                tim = tr.images[0]
-                tim.data += im
+            for j,img in enumerate(gims):
 
-                allskies[i, j] = np.median(tim.data[starmask])
+                if i == 0:
+                    img = img.copy()
+                else:
+                    tr = tractors[j]
+                    tim = tr.images[0]
+                    tim.data += img
+                    img = tim.data
+
+                med = np.median(img[starmask])
+                allskies[i, j] = med
 
                 # Estimate per-pixel noise via Blanton's "5"-pixel MAD
                 step = 3
                 slice1 = (slice(0,-5,step),slice(0,-5,step))
                 slice2 = (slice(5,None,step),slice(5,None,step))
-                mad = np.median(np.abs(tim.data[slice1] - tim.data[slice2]).ravel())
+                mad = np.median(np.abs(img[slice1] - img[slice2]).ravel())
                 sig1 = 1.4826 * mad / np.sqrt(2.)
-                tim.sig1 = sig1
-                tim.inverr[:,:] = 1./sig1
-                tr.optimize_loop(shared_params=False)
-                #print('Params:', tr.getParams())
+                sig1s[i, j] = sig1
+
+                if i == 0:
+                    tim = Image(img, inverr=np.ones_like(img)/sig1,
+                                psf=NCircularGaussianPSF([2.], [1.]),
+                                sky=ConstantSky(med))
+                    tim.psf.freezeParam('weights')
+                    tim.sig1 = sig1
+
+                    h,w = img.shape
+                    flux = np.sum(img) - med * h*w
+                    flux = max(flux, 100)
+                    src = PointSource(PixPos(25, 25), Flux(flux))
+                    tr = Tractor([tim], [src])
+                    X = tr.optimize_loop()
+                    #print('opt results:', X)
+                    #print('Initial fit params:')
+                    #tr.printThawedParams()
+                    s = tim.psf.getParams()[0]
+                    if s < 0:
+                        ### Wtf
+                        tim.psf.setParams([np.abs(s)])
+                        tr.optimize_loop()
+                    mod1 = tr.getModelImage(0)
+                    tractors.append(tr)
+
+                    init_tractor_plot.append((img.copy(), med, tim.sig1, mod1))
+                else:
+                    tim.sig1 = sig1
+                    tim.inverr[:,:] = 1./sig1
+                    tr.optimize_loop(shared_params=False)
 
                 allparams[i, j, :] = tr.getParams()
-                sig1s[i, j] = sig1
 
                 # Aperture photometry
                 apxy = np.array([[(w-1)/2, (h-1)/2],])
                 ap = []
                 aprad_pix = 15.
                 aper = photutils.aperture.CircularAperture(apxy, aprad_pix)
-                p = photutils.aperture_photometry(tim.data, aper)
+                p = photutils.aperture.aperture_photometry(tim.data, aper)
                 apflux = p.field('aperture_sum')
                 apflux = float(apflux.data[0])
-
-                #print('Tractor flux:', tr.catalog[0].getBrightness())
-                #print('Aperture flux:', apflux)
-                #print('Strip_skies shape:', strip_skies.shape)
-                #print('strip sky:', ss)
+                # accumulated strip_skies
                 ss = np.sum(strip_skies[:i+1, j])
                 sky = ss * np.pi * aprad_pix**2
-                #print('Apflux - ss:', float(apflux) - sky)
                 apskies[i, j] = sky
                 apfluxes[i, j] = apflux
             print('.', end='')
             sys.stdout.flush()
         print()
+                
+        # Initial tractor fit plot
+        plt.clf()
+        for j,(img,med,sig1,mod) in enumerate(init_tractor_plot):
+            plt.subplot(4,4, j + 1)
+            plt.imshow(img, interpolation='nearest', origin='lower')
+            plt.title(chipnames[j])
+            plt.subplot(4,4, j + 5)
+            ima = dict(interpolation='nearest', origin='lower',
+                       vmin=med-3*sig1, vmax=med+10*sig1)
+            plt.imshow(img, **ima)
+            plt.subplot(4,4, j + 9)
+            plt.imshow(mod, **ima)
+            plt.subplot(4,4, j + 13)
+            plt.imshow((img - mod)/sig1, interpolation='nearest', origin='lower',
+                       vmin=-10, vmax=+10)
+        plt.suptitle('Initial tractor fits')
+        ps.savefig()
 
         plt.clf()
         for j,tr in enumerate(tractors):
