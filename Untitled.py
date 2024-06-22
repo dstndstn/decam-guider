@@ -119,6 +119,10 @@ def plot_from_npz(expnum, fn, summary=False):
     nframes, nguide = instmags.shape
     apfluxes = R['apfluxes']
     apskies = R['apskies']
+    gaia_mags = R['gaia_mags']
+    g  = gaia_mags[:,0]
+    bp = gaia_mags[:,1]
+    rp = gaia_mags[:,2]
 
     nominal_zpt = nominal_zeropoints[filt]
     k_airmass_ext = airmass_extinctions.get(filt, 0.)
@@ -128,6 +132,25 @@ def plot_from_npz(expnum, fn, summary=False):
               '(airmass %.2f, k_co %.3f)' % (airmass, k_airmass_ext))
 
     expected_zpt = nominal_zpt - k_airmass_ext * (airmass - 1.0)
+
+    # WHOOPS messed up the color term!
+    assert(filt is not None)
+    bprp = bp - rp
+    colorterm = gaia_color_terms.get(filt, None)
+    assert(colorterm is not None)
+    gaia_band, (c_lo,c_hi), poly = colorterm
+    ind = {'G':0, 'BP':1, 'RP':2}.get(gaia_band)
+    base = gaia_mags[:, ind]
+    use_for_zpt[np.logical_or(bp == 0, rp == 0)] = False
+    # Drop stars outside the color term range
+    use_for_zpt[np.logical_or(bprp < c_lo, bprp > c_hi)] = False
+    bprp = np.clip(bprp, c_lo, c_hi)
+    colorterm = 0.
+    for i,c in enumerate(poly):
+        colorterm = colorterm + c * bprp**i
+    ref_mags[use_for_zpt] = (base + colorterm)[use_for_zpt]
+
+
     ref_inst = ref_mags - expected_zpt
 
     transp = 10.**((instmags - ref_inst[np.newaxis, :])/-2.5)
@@ -140,11 +163,6 @@ def plot_from_npz(expnum, fn, summary=False):
 
     ap_instmags = -2.5 * np.log10(d_apflux)
     ap_transp = 10.**((ap_instmags - ref_inst[np.newaxis, :])/-2.5)
-
-    gaia_mags = R['gaia_mags']
-    g  = gaia_mags[:,0]
-    bp = gaia_mags[:,1]
-    rp = gaia_mags[:,2]
 
     xys = R['guide_xy']
     xx = np.array([x[0] for x in xys])
@@ -162,10 +180,11 @@ def plot_from_npz(expnum, fn, summary=False):
     T.transparency = transp
     T.d_apflux = d_apflux
     T.ap_transparency = ap_transp
-    for k in ['ref_mags', 'use_for_zpt']:
-        T.set(k, R[k][np.newaxis,:].repeat(nframes, axis=0))
+    #for k in ['ref_mags', 'use_for_zpt']:
+    #    T.set(k, R[k][np.newaxis,:].repeat(nframes, axis=0))
     loc = locals()
-    for k in ['g', 'bp', 'rp', 'xx', 'yy']:
+    for k in ['g', 'bp', 'rp', 'xx', 'yy',
+              'ref_mags', 'use_for_zpt']:
         T.set(k, loc[k][np.newaxis,:].repeat(nframes, axis=0))
     for k,t in [('expnum', int), ('airmass', np.float32),
                 ('expected_zpt', np.float32)]:
@@ -184,7 +203,7 @@ def main():
         expnums.append(int(words[-2]))
     print(len(expnums), 'exposures found')
 
-    if False:
+    if True:
         TT = []
         mm = []
         for expnum in expnums:
@@ -212,12 +231,25 @@ def main():
             print(np.sum(T.filter == f), 'in', f)
             I = T.use_for_zpt * (T.filter[:,np.newaxis] == f)
             plt.clf()
-            plt.scatter(T.ref_mags[I], T.transparency[I],
-                        c=T.bp[I]-T.rp[I], s=1)
-            plt.xlabel('Gaia-predicted mag')
-            plt.ylabel('Transparency')
-            cb = plt.colorbar()
-            cb.set_label('Gaia BP-RP')
+
+            plt.subplot(2,1,1)
+            plt.scatter((T.bp - T.rp)[I], (T.instmags - T.g)[I], s=1,
+                        c=T.airmass[:,np.newaxis].repeat(nguide, axis=1)[I])
+            plt.xlabel('BP - RP')
+            plt.ylabel('Instmag - G')
+
+            plt.subplot(2,1,2)
+            plt.scatter((T.bp - T.rp)[I], (T.instmags - T.ref_mags)[I], s=1)
+            plt.xlabel('BP - RP')
+            plt.ylabel('Instmag - (G+color)')
+
+
+            # plt.scatter(T.ref_mags[I], T.transparency[I],
+            #             c=T.bp[I]-T.rp[I], s=1)
+            # plt.xlabel('Gaia-predicted mag')
+            # plt.ylabel('Transparency')
+            # cb = plt.colorbar()
+            # cb.set_label('Gaia BP-RP')
             plt.title('2024-02-28: filter %s' % f)
             plt.savefig('trends-%s.png' % f)
         return
@@ -405,7 +437,7 @@ def run_expnum(expnum):
             bprp = np.clip(bprp, c_lo, c_hi)
             colorterm = 0.
             for i,c in enumerate(poly):
-                colorterm = colorterm + c * bprp
+                colorterm = colorterm + c * bprp**i
             
             ref_mags[use_for_zpt] = (base + colorterm)[use_for_zpt]
             print('Color term corrected mags:',
