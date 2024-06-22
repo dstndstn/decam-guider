@@ -112,8 +112,6 @@ def plot_from_npz(expnum, fn, summary=False):
     instmags = R['instmags']
     use_for_zpt = R['use_for_zpt']
 
-    #if filt != 'r':
-    #    return
     if not ('gaia_mags' in R and 'apfluxes' in R):
         print('No Gaia mags / ap fluxes in', fn)
         return
@@ -130,16 +128,9 @@ def plot_from_npz(expnum, fn, summary=False):
               '(airmass %.2f, k_co %.3f)' % (airmass, k_airmass_ext))
 
     expected_zpt = nominal_zpt - k_airmass_ext * (airmass - 1.0)
-    #mags = instmags + expected_zpt
     ref_inst = ref_mags - expected_zpt
 
-    #print('Ref mags:', ', '.join(['%.3g' % m for m in ref_mags]))
-    #print('Median inst_mags + clear-sky zeropoint:', np.median(instmags + expected_zpt, axis=1))
-    #print('Median mag diffs:',
-    #np.median(instmags - ref_inst[np.newaxis,:], axis=1))
-
     transp = 10.**((instmags - ref_inst[np.newaxis, :])/-2.5)
-    #print('Transparency:', np.median(transp, axis=1))
 
     d_apflux = apfluxes.copy()
     d_apflux[1:,:] = np.diff(d_apflux, axis=0)
@@ -149,17 +140,12 @@ def plot_from_npz(expnum, fn, summary=False):
 
     ap_instmags = -2.5 * np.log10(d_apflux)
     ap_transp = 10.**((ap_instmags - ref_inst[np.newaxis, :])/-2.5)
-    #print('Aperture-flux transparency:', np.median(ap_transp, axis=1))
-    
+
     gaia_mags = R['gaia_mags']
     g  = gaia_mags[:,0]
     bp = gaia_mags[:,1]
     rp = gaia_mags[:,2]
-    #print('Gaia mags:', gaia_mags)
-    # for j in range(4):
-    #     if use_for_zpt[j]:
-    #         t = transp[j,:]
-    #         plt.scatter([ref_mags[j]]*len(t), t, c=(bp-rp)[j])
+
     xys = R['guide_xy']
     xx = np.array([x[0] for x in xys])
     yy = np.array([x[1] for x in xys])
@@ -169,44 +155,10 @@ def plot_from_npz(expnum, fn, summary=False):
         ps = PlotSequence('guider-exp%i' % expnum)
         ps.skipto(7)
     
-        plt.clf()
-        for j in range(nguide):
-            sty = '-'
-            ll = ' (pred. mag %.2f)' % (ref_mags[j])
-            if not use_for_zpt[j]:
-                sty = ':'
-                ll = ''
-            p = plt.plot(100. * transp[:,j], sty, label=chipnames[j] + ll)
-
-            plt.plot(100. * ap_transp[:,j], '--', color=p[0].get_color(),
-                     label=chipnames[j] + ' (aperture)')
-            # + ' (G = %.2f, BP-RP = %.2f)' % bprps[j])
-        ax = plt.axis()
-        plt.legend()
-        plt.ylabel('Guide star implied transparency (%)')
-        plt.xlabel('Guider frame number')
-        plt.title('Transparency (exp %i: %s)' % (expnum, filt))
-        yl,yh = plt.ylim()
-        plt.ylim(0, yh)
-        #plt.ylim(0, 120)
-        ps.savefig()
-
-        plt.clf()
-        flux = 10.**(instmags / -2.5)
-
-        for j in range(nguide):
-            p = plt.plot(flux[:,j])
-            c = p[0].get_color()
-            plt.plot(d_apflux[:,j], '--', color=c)
-        plt.ylabel('flux')
-        plt.xlabel('Guider frame number')
-        plt.title('(exp %i: %s)' % (expnum, filt))
-        ps.savefig()
 
     T = fits_table()
     for k in ['apfluxes', 'apskies', 'instmags']:
         T.set(k, R[k])
-    print('T length:', len(T))
     T.transparency = transp
     T.d_apflux = d_apflux
     T.ap_transparency = ap_transp
@@ -215,19 +167,13 @@ def plot_from_npz(expnum, fn, summary=False):
     loc = locals()
     for k in ['g', 'bp', 'rp', 'xx', 'yy']:
         T.set(k, loc[k][np.newaxis,:].repeat(nframes, axis=0))
-    print('T length:', len(T))
     for k,t in [('expnum', int), ('airmass', np.float32),
                 ('expected_zpt', np.float32)]:
         T.set(k, np.zeros(nframes, t) + loc[k])
     T.filter = np.array([filt]*nframes)
-    T.about()
-
     meta = dict(expnum=expnum, chipnames=chipnames, filter=filt,
                 expected_zpt=expected_zpt, airmass=airmass)
-
     return T,meta
-    #    return (ref_mags, transp, (bp-rp), use_for_zpt, instmags, expnum, g, yy,
-    #        ap_transp)
 
 def main():
     fns = glob(os.path.join(basedir, 'DECam_guider_*_00000000.fits.gz'))
@@ -238,8 +184,7 @@ def main():
         expnums.append(int(words[-2]))
     print(len(expnums), 'exposures found')
 
-    if True:
-        #XX = [ [] for i in range(9) ]
+    if False:
         TT = []
         mm = []
         for expnum in expnums:
@@ -257,8 +202,6 @@ def main():
                 T,meta = X
                 TT.append(T)
                 mm.append(meta)
-                # for i,xi in enumerate(X):
-                #         XX[i].append(xi)
 
         T = merge_tables(TT)
         T.about()
@@ -277,53 +220,21 @@ def main():
             cb.set_label('Gaia BP-RP')
             plt.title('2024-02-28: filter %s' % f)
             plt.savefig('trends-%s.png' % f)
-
-        # nguide = 4
-        # rr, tt, bb, ii, ee, gg, yy, aptt = [],[],[],[], [], [], [], []
-        # for refs,tr,bprp,use,imags,enum,gmag,y,apt in zip(*XX):
-        #     for j in range(nguide):
-        #         if not use[j]:
-        #             continue
-        #         t = tr[:,j]
-        #         tt.append(t)
-        #         ii.append(imags[:,j])
-        #         rr.append([refs[j]]*len(t))
-        #         bb.append([bprp[j]]*len(t))
-        #         ee.append([enum]*len(t))
-        #         gg.append([gmag[j]]*len(t))
-        #         yy.append([y[j]]*len(t))
-        #         aptt.append(apt[:,j])
-        # 
-        # #plt.scatter(np.hstack(rr), np.hstack(tt), c=np.hstack(yy), s=1)
-        # plt.scatter(np.hstack(rr), np.hstack(aptt), c=np.hstack(yy), s=1)
-        # #plt.scatter(np.hstack(rr), np.hstack(tt), c=np.hstack(bb), s=1)
-        # #plt.scatter(np.hstack(rr), np.hstack(tt), c=np.hstack(ee), s=1)
-        # #plt.scatter(np.hstack(gg), np.hstack(tt), c=np.hstack(bb), s=1)
-        # plt.xlabel('Gaia-predicted mag')
-        # #plt.xlabel('Gaia G mag')
-        # plt.ylabel('Transparency')
-        # cb = plt.colorbar()
-        # #cb.set_label('Gaia BP-RP')
-        # cb.set_label('y coordinate')
-        # #cb.set_label('Expnum')
-        # plt.title('r-band data from 2024-02-28 (aperture phot)')
-        # #plt.scatter(np.hstack(rr), np.hstack(ii), c=np.hstack(bb), s=1)
-        # plt.savefig('trends.png')
         return
 
     threads = 4
     #if threads:
     from astrometry.util.multiproc import multiproc
     mp = multiproc(threads)
+
+    expnums = [1278635]
+    
     mp.map(bounce_one_expnum, expnums)
     return
     
     for expnum in expnums:
-        #     #if expnum != 1278687:
         #     #if expnum < 1278723:
-        #     #if expnum < 1278712:
         #     #    continue
-        #     #1278687
         #if expnum != 1278635:
         #    continue
 
@@ -338,8 +249,8 @@ def main():
 
 def bounce_one_expnum(expnum):
     npzfn = 'guider-tractor-fit-%i.npz' % expnum
-    if os.path.exists(npzfn):
-        return
+    #if os.path.exists(npzfn):
+    #    return
     R = run_expnum(expnum)
     if R is None:
         return
@@ -794,14 +705,9 @@ def run_expnum(expnum):
     #     ps.savefig()
 
     pflux = allparams[:, :, 4]
-    #print('Flux param:', pflux.shape)
-    #print('pflux:', pflux)
     dflux = np.diff(np.vstack(([0]*nguide, pflux)), axis=0)
-    #print('Flux diff:', dflux.shape)
-    #print('dflux:', dflux)
-    plt.clf()
-    print('Ref mags:', ref_mags)
     instmags = -2.5 * np.log10(dflux)
+
     if np.sum(use_for_zpt):
         #print('computing zpt from', (ref_mags[np.newaxis, :] - instmags)[:, use_for_zpt].shape)
         zpt = np.median((ref_mags[np.newaxis, :] - instmags)[:, use_for_zpt])
@@ -810,6 +716,8 @@ def run_expnum(expnum):
         # ... so use 'em all anyway
         zpt = np.median(ref_mags[np.newaxis, :] - instmag)
     print('Fit zeropoint: %.3f' % zpt)
+
+    plt.clf()
     colors = []
     for j in range(nguide):
         #plt.axhline(gmags[j], color='k', label=('Gaia G' if j==3 else None))
@@ -831,6 +739,59 @@ def run_expnum(expnum):
     plt.legend()
     ps.savefig()
 
+    nominal_zpt = nominal_zeropoints[filt]
+    k_airmass_ext = airmass_extinctions.get(filt, 0.)
+    airmass = AIRMASSES.get(expnum, 1.0)
+    if k_airmass_ext == 0 or airmass == 1.0:
+        print('WARNING, no airmass correction for expnum', expnum,
+              '(airmass %.2f, k_co %.3f)' % (airmass, k_airmass_ext))
+
+    expected_zpt = nominal_zpt - k_airmass_ext * (airmass - 1.0)
+    ref_inst = ref_mags - expected_zpt
+
+    transp = 10.**((instmags - ref_inst[np.newaxis, :])/-2.5)
+
+    d_apflux = apfluxes.copy()
+    d_apflux[1:,:] = np.diff(d_apflux, axis=0)
+    d_apsky = apskies.copy()
+    d_apsky [1:,:] = np.diff(d_apsky , axis=0)
+    d_apflux -= d_apsky
+    ap_instmags = -2.5 * np.log10(d_apflux)
+    ap_transp = 10.**((ap_instmags - ref_inst[np.newaxis, :])/-2.5)
+    
+    plt.clf()
+    for j in range(nguide):
+        sty = '-'
+        ll = ' (pred. mag %.2f)' % (ref_mags[j])
+        if not use_for_zpt[j]:
+            sty = ':'
+            ll = ''
+        p = plt.plot(100. * transp[:,j], sty, label=chipnames[j] + ll)
+        plt.plot(100. * ap_transp[:,j], '--', color=p[0].get_color(),
+                 label=chipnames[j] + ' (aperture)')
+        # + ' (G = %.2f, BP-RP = %.2f)' % bprps[j])
+    ax = plt.axis()
+    plt.legend()
+    plt.ylabel('Guide star implied transparency (%)')
+    plt.xlabel('Guider frame number')
+    plt.title('Transparency (exp %i: %s)' % (expnum, filt))
+    yl,yh = plt.ylim()
+    plt.ylim(0, yh)
+    #plt.ylim(0, 120)
+    ps.savefig()
+
+    plt.clf()
+    #flux = 10.**(instmags / -2.5)
+    for j in range(nguide):
+        p = plt.plot(dflux[:,j])
+        c = p[0].get_color()
+        plt.plot(d_apflux[:,j], '--', color=c)
+    plt.ylabel('flux')
+    plt.xlabel('Guider frame number')
+    plt.title('(exp %i: %s)' % (expnum, filt))
+    ps.savefig()
+
+    
     # Fit zeropoint: 24.898 --> assume 0.6 sec exposures -> 25.453
     # (-> correcting for airmass = 25.470)
 
