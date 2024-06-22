@@ -11,6 +11,7 @@ from tractor import (PixPos, Flux, NCircularGaussianPSF, Image, PointSource,
                      ConstantSky, Tractor)
 from astrometry.util.plotutils import PlotSequence
 from astrometry.util.util import Sip
+from astrometry.util.fits import fits_table, merge_tables
 from legacypipe.gaiacat import GaiaCatalog
     
 
@@ -38,7 +39,6 @@ AIRMASSES = {
     1278647: 1.17,
 }
 
-from astrometry.util.fits import fits_table
 T = fits_table('obsdb.fits')
 T.cut(T.expnum < 1300000)
 T.cut(T.extension == 'N4')
@@ -112,10 +112,10 @@ def plot_from_npz(expnum, fn, summary=False):
     instmags = R['instmags']
     use_for_zpt = R['use_for_zpt']
 
-    if filt != 'r':
-        return
+    #if filt != 'r':
+    #    return
     if not ('gaia_mags' in R and 'apfluxes' in R):
-        print('No Gaia mags in', fn)
+        print('No Gaia mags / ap fluxes in', fn)
         return
 
     nframes, nguide = instmags.shape
@@ -161,7 +161,8 @@ def plot_from_npz(expnum, fn, summary=False):
     #         t = transp[j,:]
     #         plt.scatter([ref_mags[j]]*len(t), t, c=(bp-rp)[j])
     xys = R['guide_xy']
-    yy = [x[1] for x in xys]
+    xx = np.array([x[0] for x in xys])
+    yy = np.array([x[1] for x in xys])
 
     if not summary:
         from astrometry.util.plotutils import PlotSequence
@@ -202,9 +203,31 @@ def plot_from_npz(expnum, fn, summary=False):
         plt.title('(exp %i: %s)' % (expnum, filt))
         ps.savefig()
 
-        
-    return (ref_mags, transp, (bp-rp), use_for_zpt, instmags, expnum, g, yy,
-            ap_transp)
+    T = fits_table()
+    for k in ['apfluxes', 'apskies', 'instmags']:
+        T.set(k, R[k])
+    print('T length:', len(T))
+    T.transparency = transp
+    T.d_apflux = d_apflux
+    T.ap_transparency = ap_transp
+    for k in ['ref_mags', 'use_for_zpt']:
+        T.set(k, R[k][np.newaxis,:].repeat(nframes, axis=0))
+    loc = locals()
+    for k in ['g', 'bp', 'rp', 'xx', 'yy']:
+        T.set(k, loc[k][np.newaxis,:].repeat(nframes, axis=0))
+    print('T length:', len(T))
+    for k,t in [('expnum', int), ('airmass', np.float32),
+                ('expected_zpt', np.float32)]:
+        T.set(k, np.zeros(nframes, t) + loc[k])
+    T.filter = np.array([filt]*nframes)
+    T.about()
+
+    meta = dict(expnum=expnum, chipnames=chipnames, filter=filt,
+                expected_zpt=expected_zpt, airmass=airmass)
+
+    return T,meta
+    #    return (ref_mags, transp, (bp-rp), use_for_zpt, instmags, expnum, g, yy,
+    #        ap_transp)
 
 def main():
     fns = glob(os.path.join(basedir, 'DECam_guider_*_00000000.fits.gz'))
@@ -216,7 +239,9 @@ def main():
     print(len(expnums), 'exposures found')
 
     if True:
-        XX = [ [] for i in range(9) ]
+        #XX = [ [] for i in range(9) ]
+        TT = []
+        mm = []
         for expnum in expnums:
             npzfn = 'guider-tractor-fit-%i.npz' % expnum
             if os.path.exists(npzfn):
@@ -229,41 +254,61 @@ def main():
                 X = plot_from_npz(expnum, npzfn, summary=True)
                 if X is None:
                     continue
-                for i,xi in enumerate(X):
-                    XX[i].append(xi)
+                T,meta = X
+                TT.append(T)
+                mm.append(meta)
+                # for i,xi in enumerate(X):
+                #         XX[i].append(xi)
 
+        T = merge_tables(TT)
+        T.about()
         nguide = 4
-        rr, tt, bb, ii, ee, gg, yy, aptt = [],[],[],[], [], [], [], []
-        for refs,tr,bprp,use,imags,enum,gmag,y,apt in zip(*XX):
-            for j in range(nguide):
-                if not use[j]:
-                    continue
-                print('y', y)
-                t = tr[:,j]
-                tt.append(t)
-                ii.append(imags[:,j])
-                rr.append([refs[j]]*len(t))
-                bb.append([bprp[j]]*len(t))
-                ee.append([enum]*len(t))
-                gg.append([gmag[j]]*len(t))
-                yy.append([y[j]]*len(t))
-                aptt.append(apt[:,j])
 
-        #plt.scatter(np.hstack(rr), np.hstack(tt), c=np.hstack(yy), s=1)
-        plt.scatter(np.hstack(rr), np.hstack(aptt), c=np.hstack(yy), s=1)
-        #plt.scatter(np.hstack(rr), np.hstack(tt), c=np.hstack(bb), s=1)
-        #plt.scatter(np.hstack(rr), np.hstack(tt), c=np.hstack(ee), s=1)
-        #plt.scatter(np.hstack(gg), np.hstack(tt), c=np.hstack(bb), s=1)
-        plt.xlabel('Gaia-predicted mag')
-        #plt.xlabel('Gaia G mag')
-        plt.ylabel('Transparency')
-        cb = plt.colorbar()
-        #cb.set_label('Gaia BP-RP')
-        cb.set_label('y coordinate')
-        #cb.set_label('Expnum')
-        plt.title('r-band data from 2024-02-28 (aperture phot)')
-        #plt.scatter(np.hstack(rr), np.hstack(ii), c=np.hstack(bb), s=1)
-        plt.savefig('trends.png')
+        filts = np.unique(T.filter)
+        for f in filts:
+            print(np.sum(T.filter == f), 'in', f)
+            I = T.use_for_zpt * (T.filter[:,np.newaxis] == f)
+            plt.clf()
+            plt.scatter(T.ref_mags[I], T.transparency[I],
+                        c=T.bp[I]-T.rp[I], s=1)
+            plt.xlabel('Gaia-predicted mag')
+            plt.ylabel('Transparency')
+            cb = plt.colorbar()
+            cb.set_label('Gaia BP-RP')
+            plt.title('2024-02-28: filter %s' % f)
+            plt.savefig('trends-%s.png' % f)
+
+        # nguide = 4
+        # rr, tt, bb, ii, ee, gg, yy, aptt = [],[],[],[], [], [], [], []
+        # for refs,tr,bprp,use,imags,enum,gmag,y,apt in zip(*XX):
+        #     for j in range(nguide):
+        #         if not use[j]:
+        #             continue
+        #         t = tr[:,j]
+        #         tt.append(t)
+        #         ii.append(imags[:,j])
+        #         rr.append([refs[j]]*len(t))
+        #         bb.append([bprp[j]]*len(t))
+        #         ee.append([enum]*len(t))
+        #         gg.append([gmag[j]]*len(t))
+        #         yy.append([y[j]]*len(t))
+        #         aptt.append(apt[:,j])
+        # 
+        # #plt.scatter(np.hstack(rr), np.hstack(tt), c=np.hstack(yy), s=1)
+        # plt.scatter(np.hstack(rr), np.hstack(aptt), c=np.hstack(yy), s=1)
+        # #plt.scatter(np.hstack(rr), np.hstack(tt), c=np.hstack(bb), s=1)
+        # #plt.scatter(np.hstack(rr), np.hstack(tt), c=np.hstack(ee), s=1)
+        # #plt.scatter(np.hstack(gg), np.hstack(tt), c=np.hstack(bb), s=1)
+        # plt.xlabel('Gaia-predicted mag')
+        # #plt.xlabel('Gaia G mag')
+        # plt.ylabel('Transparency')
+        # cb = plt.colorbar()
+        # #cb.set_label('Gaia BP-RP')
+        # cb.set_label('y coordinate')
+        # #cb.set_label('Expnum')
+        # plt.title('r-band data from 2024-02-28 (aperture phot)')
+        # #plt.scatter(np.hstack(rr), np.hstack(ii), c=np.hstack(bb), s=1)
+        # plt.savefig('trends.png')
         return
 
     threads = 4
