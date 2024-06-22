@@ -55,7 +55,8 @@ gaia_color_terms = dict(
     # filter = (gaia_band, bp_color_range, bp_poly)
     r = ('G', (0.7, 2.0), [ 0.20955288, -0.43624861,  0.07023776,  0.05471446]),
     g = ('G', (0.7, 2.0), [ 0.63551392, -1.68398593,  1.98642154, -0.46866005]),
-    z = ('G', (0.7, 2.0), [ 0.27618418, -0.39479863, -0.27949407,  0.06148139]),
+    #z = ('G', (0.7, 2.0), [ 0.27618418, -0.39479863, -0.27949407,  0.06148139]),
+    z = ('G', (0.7, 2.0), [ 0.51733869, -1.00186239,  0.1878583 , -0.0404338 ]),
     N673 = ('G', (0.7, 2.0), [ 0.17001402,  0.12573145, -0.53929908,  0.22958496]),
 )
 
@@ -73,6 +74,15 @@ airmass_extinctions = dict(
     N673 = 0.10,
 )
 
+# Thanks, https://stackoverflow.com/questions/20601872/numpy-or-scipy-to-calculate-weighted-median
+def weighted_median(values, weights):
+    i = np.argsort(values)
+    c = np.cumsum(weights[i])
+    return values[i[np.searchsorted(c, 0.5 * c[-1])]]
+def weighted_quantiles(values, weights, quantiles=0.5):
+    i = np.argsort(values)
+    c = np.cumsum(weights[i])
+    return values[i[np.searchsorted(c, np.array(quantiles) * c[-1])]]
 
 def assemble_full_frames(fn):
     F = fitsio.FITS(fn, 'r')
@@ -111,6 +121,33 @@ def plot_from_npz(expnum, fn, summary=False):
     ref_mags = R['ref_mags']
     instmags = R['instmags']
     use_for_zpt = R['use_for_zpt']
+
+    if not ('gaiastars' in R):
+        gaiastars = []
+        gaia = GaiaCatalog(cache=True)
+        rds = np.array(R['guide_rd'])
+        ra  = rds[:,0]
+        dec = rds[:,1]
+        for wcs,r,d in zip(R['wcs'], ra, dec):
+            gaiacat = gaia.get_catalog_in_wcs(wcs)
+            # HACK - distance func
+            i = np.argmin(np.hypot(gaiacat.ra - r, gaiacat.dec - d))
+            gaiastars.append(gaiacat[np.array([i])])
+        gaiastars = merge_tables(gaiastars)
+        #print('Gaia stars:')
+        #gaiastars.about()
+        keys = R.keys()
+        R = dict([(k, R[k]) for k in keys])
+        R['gaiastars'] = gaiastars.to_dict()
+        np.savez(fn, **R)
+        R = np.load(fn, allow_pickle=True)
+
+    # npz mangles fits_tables & dicts    
+    gaiastars = R['gaiastars'].tolist()
+    gs = fits_table()
+    for k,v in gaiastars.items():
+        gs.set(k, v)
+    gaiastars = gs
 
     if not ('gaia_mags' in R and 'apfluxes' in R):
         print('No Gaia mags / ap fluxes in', fn)
@@ -164,15 +201,21 @@ def plot_from_npz(expnum, fn, summary=False):
     ap_instmags = -2.5 * np.log10(d_apflux)
     ap_transp = 10.**((ap_instmags - ref_inst[np.newaxis, :])/-2.5)
 
-    xys = R['guide_xy']
-    xx = np.array([x[0] for x in xys])
-    yy = np.array([x[1] for x in xys])
+    xys = np.array(R['guide_xy'])
+    xx = xys[:,0]
+    yy = xys[:,1]
+
+    rds = np.array(R['guide_rd'])
+    ra  = rds[:,0]
+    dec = rds[:,1]
+
+    gaia_bp_snr = gaiastars.phot_bp_mean_flux_over_error
+    gaia_rp_snr = gaiastars.phot_rp_mean_flux_over_error
 
     if not summary:
         from astrometry.util.plotutils import PlotSequence
         ps = PlotSequence('guider-exp%i' % expnum)
         ps.skipto(7)
-    
 
     T = fits_table()
     for k in ['apfluxes', 'apskies', 'instmags']:
@@ -184,7 +227,7 @@ def plot_from_npz(expnum, fn, summary=False):
     #    T.set(k, R[k][np.newaxis,:].repeat(nframes, axis=0))
     loc = locals()
     for k in ['g', 'bp', 'rp', 'xx', 'yy',
-              'ref_mags', 'use_for_zpt']:
+              'ref_mags', 'use_for_zpt', 'gaia_bp_snr', 'gaia_rp_snr']:
         T.set(k, loc[k][np.newaxis,:].repeat(nframes, axis=0))
     for k,t in [('expnum', int), ('airmass', np.float32),
                 ('expected_zpt', np.float32)]:
@@ -239,7 +282,13 @@ def main():
             plt.ylabel('Instmag - G')
 
             plt.subplot(2,1,2)
-            plt.scatter((T.bp - T.rp)[I], (T.instmags - T.ref_mags)[I], s=1)
+            y = (T.instmags - T.ref_mags)[I]
+            m = np.median(y)
+            plt.scatter((T.bp - T.rp)[I], np.clip(y, m-1, m+1), s=1,
+                        c=np.minimum(T.gaia_bp_snr, T.gaia_rp_snr)[I],
+                        vmin=0, vmax=50)
+            cb = plt.colorbar()
+            cb.set_label('BP/RP S/N')
             plt.xlabel('BP - RP')
             plt.ylabel('Instmag - (G+color)')
 
@@ -402,6 +451,7 @@ def run_expnum(expnum):
     # Match Gaia catalog to selected guide stars.
     use_for_zpt = np.ones(nguide, bool)
     mags = []
+    gaiastars = []
     for j,((x,y),cat) in enumerate(zip(xys, cats)):
         d = np.hypot(x - (cat.x-1), y - (cat.y-1))
         i = np.argmin(d)
@@ -410,12 +460,17 @@ def run_expnum(expnum):
             print('WARNING: failed to find Gaia star near supposed guide star')
             use_for_zpt[j] = False
             m = (0., 0., 0.)
+            fake = fits_table()
+            fake.ra = np.array([0])
+            gaiastars.append(fake)
         else:
             m = (cat.phot_g_mean_mag[i], cat.phot_bp_mean_mag[i],
                  cat.phot_rp_mean_mag[i])
             print('Gaia star: G %.2f, BP %.2f, RP %.2f' % m)
+            gaiastars.append(cat[np.array([i])])
         mags.append(m)
     mags = np.array(mags)
+    gaiastars = merge_tables(gaiastars, columns='fillzero')
 
     # Apply color terms...
     # (default to G)
@@ -838,7 +893,8 @@ def run_expnum(expnum):
              ref_mags=ref_mags, instmags=instmags, zpt=zpt,
              use_for_zpt=use_for_zpt,
              gaia_mags=mags, wcs=wcses, guide_xy=xys, guide_rd=rds,
-             apfluxes=apfluxes, apskies=apskies)
+             apfluxes=apfluxes, apskies=apskies,
+             gaiastars=gaiastars)
 
 if __name__ == '__main__':
     main()
