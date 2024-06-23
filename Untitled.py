@@ -53,12 +53,26 @@ gaia_color_terms = dict(
     # python copilot.py --save-phot '~/decam-guider/data-2024-02-28/copilot-phot/phot-(EXPNUM)-(EXT).fits' ~/decam-guider/data-2024-02-28/decam/c4d_240229_021855_ori.fits.fz
     #   --ext N8,N9,N10,N11,N12,N13,N14,N15,N16,N17,N18,N19,N20,S8,S9,S10,S11,S12,S13,S14,S15,S16,S17,S18,S19,S20 --threads 16
     # filter = (gaia_band, bp_color_range, bp_poly)
-    r = ('G', (0.7, 2.0), [ 0.20955288, -0.43624861,  0.07023776,  0.05471446]),
-    g = ('G', (0.7, 2.0), [ 0.63551392, -1.68398593,  1.98642154, -0.46866005]),
-    #z = ('G', (0.7, 2.0), [ 0.27618418, -0.39479863, -0.27949407,  0.06148139]),
-    z = ('G', (0.7, 2.0), [ 0.51733869, -1.00186239,  0.1878583 , -0.0404338 ]),
+    r = ('G', (0.7, 2.0), [ 0.02752588,  0.03825722, -0.3158438 ,  0.14626219]),
+    #g = ('G', (0.7, 2.0), [ 0.63551392, -1.68398593,  1.98642154, -0.46866005]),
+    g = ('G', (0.7, 2.0), [ 0.36423847, -0.98522136,  1.36913521, -0.31177573]),
+    z = ('G', (0.7, 2.0), [ 0.51604316, -0.99860037,  0.18527867, -0.03979571]),
     N673 = ('G', (0.7, 2.0), [ 0.17001402,  0.12573145, -0.53929908,  0.22958496]),
 )
+
+#Median trans for N673 : 0.3772193640470505
+#Median trans for g : 1.0593839883804321
+#Median trans for r : 0.7122441828250885
+#Median trans for z : 0.5655636541027943
+for f,corr in [
+    ('N673', 0.377219),
+    ('g',  1.059383988),
+    ('r',   0.712244182),
+    ('z',   0.565563654)]:
+    (b,cr,poly) = gaia_color_terms[f]
+    poly[0] += -2.5*np.log10(corr)
+    gaia_color_terms[f] = (b, cr, poly)
+
 
 nominal_zeropoints = dict(
     g = 25.15,
@@ -187,7 +201,6 @@ def plot_from_npz(expnum, fn, summary=False):
         colorterm = colorterm + c * bprp**i
     ref_mags[use_for_zpt] = (base + colorterm)[use_for_zpt]
 
-
     ref_inst = ref_mags - expected_zpt
 
     transp = 10.**((instmags - ref_inst[np.newaxis, :])/-2.5)
@@ -220,9 +233,11 @@ def plot_from_npz(expnum, fn, summary=False):
     T = fits_table()
     for k in ['apfluxes', 'apskies', 'instmags']:
         T.set(k, R[k])
+    T.guideframe = np.arange(nframes)
     T.transparency = transp
     T.d_apflux = d_apflux
     T.ap_transparency = ap_transp
+    T.ap_instmags = ap_instmags
     #for k in ['ref_mags', 'use_for_zpt']:
     #    T.set(k, R[k][np.newaxis,:].repeat(nframes, axis=0))
     loc = locals()
@@ -270,28 +285,69 @@ def main():
         nguide = 4
 
         filts = np.unique(T.filter)
+        
+        plt.clf()
+        plt.scatter(T.expnum[:,np.newaxis].repeat(nguide,axis=1),
+                    T.ap_transparency, s=1)
+        plt.savefig('trends.png')
+
+        print('max guide frame:', T.guideframe.max())
+        plt.clf()
+        plt.subplots_adjust(hspace=0.1)
+        elo,ehi = T.expnum.min(), T.expnum.max()
+        for i,f in enumerate(filts):
+            plt.subplot(4,1, i+1)
+            I = T.use_for_zpt * (T.filter[:,np.newaxis] == f)
+            print('Median trans for', f, ':', np.median(T.ap_transparency[I]))
+            tr = []
+            ee = np.unique(T.expnum[T.filter == f])
+            for e in ee:
+                tr.append(np.median(T.ap_transparency[(T.expnum == e)[:,np.newaxis] * T.use_for_zpt]))
+            plt.plot(ee, tr, 'r.')
+            I = np.flatnonzero(T.filter == f)
+            yl,yh = 0., 1.5
+            plt.scatter((T.expnum + T.guideframe/150)[I, np.newaxis].repeat(nguide,axis=1),
+                        np.clip(T.ap_transparency[I,:], yl, yh),
+                        s=1)
+            plt.xlim(elo,ehi)
+            plt.ylim(yl,yh)
+            if i == 1:
+                plt.ylabel('ap Transparency')
+            if i == 3:
+                plt.xlabel('Expnum')
+            else:
+                plt.xticks([])
+        plt.savefig('trends2.png')
+
+        filts = np.unique(T.filter)
         for f in filts:
             print(np.sum(T.filter == f), 'in', f)
             I = T.use_for_zpt * (T.filter[:,np.newaxis] == f)
             plt.clf()
 
             plt.subplot(2,1,1)
-            plt.scatter((T.bp - T.rp)[I], (T.instmags - T.g)[I], s=1,
+            y = (T.instmags - T.g)[I]
+            m = np.median(y)
+            plt.scatter((T.bp - T.rp)[I], np.clip(y, m-1, m+1), s=1,
                         c=T.airmass[:,np.newaxis].repeat(nguide, axis=1)[I])
             plt.xlabel('BP - RP')
             plt.ylabel('Instmag - G')
+            cb = plt.colorbar()
+            cb.set_label('Airmass')
 
             plt.subplot(2,1,2)
-            y = (T.instmags - T.ref_mags)[I]
+            #y = (T.instmags - T.ref_mags)[I]
+            y = (T.ap_instmags - T.ref_mags)[I]
             m = np.median(y)
             plt.scatter((T.bp - T.rp)[I], np.clip(y, m-1, m+1), s=1,
-                        c=np.minimum(T.gaia_bp_snr, T.gaia_rp_snr)[I],
-                        vmin=0, vmax=50)
+                        c = T.g[I])
+            #c=np.minimum(T.gaia_bp_snr, T.gaia_rp_snr)[I],
+            #vmin=0, vmax=50)
             cb = plt.colorbar()
-            cb.set_label('BP/RP S/N')
+            #cb.set_label('BP/RP S/N')
+            cb.set_label('Gaia G')
             plt.xlabel('BP - RP')
-            plt.ylabel('Instmag - (G+color)')
-
+            plt.ylabel('ApInstmag - (G+color)')
 
             # plt.scatter(T.ref_mags[I], T.transparency[I],
             #             c=T.bp[I]-T.rp[I], s=1)
@@ -299,7 +355,7 @@ def main():
             # plt.ylabel('Transparency')
             # cb = plt.colorbar()
             # cb.set_label('Gaia BP-RP')
-            plt.title('2024-02-28: filter %s' % f)
+            plt.suptitle('2024-02-28: filter %s' % f)
             plt.savefig('trends-%s.png' % f)
         return
 
