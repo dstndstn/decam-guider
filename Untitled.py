@@ -98,6 +98,26 @@ def weighted_quantiles(values, weights, quantiles=0.5):
     c = np.cumsum(weights[i])
     return values[i[np.searchsorted(c, np.array(quantiles) * c[-1])]]
 
+def fit_line_sad(x, y):
+    from scipy.optimize import minimize
+    # Fit a line, minimizing the sum of absolute differences
+    b = np.median(y)
+    # assume x sorted
+    assert(np.all(np.diff(x) > 0))
+    # Initial slope estimate: medians of first & third third
+    third = len(y)//3
+    m = ((np.median(y[-third:]) - np.median(y[:third])) /
+         (np.median(x[-third:]) - np.median(x[:third])))
+    def sad(p):
+        (bi,mi) = p
+        yi = bi + mi * x
+        return np.sum(np.abs(yi - y))
+    res = minimize(sad, (b,m))
+    print('Optimizer: success?', res.success)
+    if not res.success:
+        print('Reason:', res.message)
+    return res.x
+
 def assemble_full_frames(fn):
     F = fitsio.FITS(fn, 'r')
     chipnames = []
@@ -137,6 +157,7 @@ def plot_from_npz(expnum, fn, summary=False):
     use_for_zpt = R['use_for_zpt']
 
     if not ('gaiastars' in R):
+    #if True:
         gaiastars = []
         gaia = GaiaCatalog(cache=True)
         rds = np.array(R['guide_rd'])
@@ -148,8 +169,10 @@ def plot_from_npz(expnum, fn, summary=False):
             i = np.argmin(np.hypot(gaiacat.ra - r, gaiacat.dec - d))
             gaiastars.append(gaiacat[np.array([i])])
         gaiastars = merge_tables(gaiastars)
-        #print('Gaia stars:')
-        #gaiastars.about()
+        # print('Gaia stars:')
+        # gaiastars.about()
+        # print('Number of Gaia stars brighter than 14th:',
+        #       np.sum(gaiastars.phot_g_mean_mag < 14))
         keys = R.keys()
         R = dict([(k, R[k]) for k in keys])
         R['gaiastars'] = gaiastars.to_dict()
@@ -174,6 +197,15 @@ def plot_from_npz(expnum, fn, summary=False):
     g  = gaia_mags[:,0]
     bp = gaia_mags[:,1]
     rp = gaia_mags[:,2]
+    params = R['params']
+    paramnames = R['paramnames']
+    print('Params shape:', params.shape)
+    # ASSUME the params...
+    fit_psf_fwhm = 2.35 * params[:, :, 0]
+    fit_sky = params[:, :, 1]
+    fit_x = params[:, :, 2]
+    fit_y = params[:, :, 3]
+    fit_flux = params[:, :, 4]
 
     nominal_zpt = nominal_zeropoints[filt]
     k_airmass_ext = airmass_extinctions.get(filt, 0.)
@@ -235,12 +267,13 @@ def plot_from_npz(expnum, fn, summary=False):
         T.set(k, R[k])
     T.guideframe = np.arange(nframes)
     T.transparency = transp
-    T.d_apflux = d_apflux
     T.ap_transparency = ap_transp
-    T.ap_instmags = ap_instmags
+    loc = locals()
+    for k in ['d_apflux', 'ap_instmags',
+              'fit_psf_fwhm', 'fit_sky', 'fit_x', 'fit_y', 'fit_flux']:
+        T.set(k, loc[k])
     #for k in ['ref_mags', 'use_for_zpt']:
     #    T.set(k, R[k][np.newaxis,:].repeat(nframes, axis=0))
-    loc = locals()
     for k in ['g', 'bp', 'rp', 'xx', 'yy',
               'ref_mags', 'use_for_zpt', 'gaia_bp_snr', 'gaia_rp_snr']:
         T.set(k, loc[k][np.newaxis,:].repeat(nframes, axis=0))
@@ -261,7 +294,7 @@ def main():
         expnums.append(int(words[-2]))
     print(len(expnums), 'exposures found')
 
-    if True:
+    if False:
         TT = []
         mm = []
         for expnum in expnums:
@@ -299,16 +332,23 @@ def main():
             plt.subplot(4,1, i+1)
             I = T.use_for_zpt * (T.filter[:,np.newaxis] == f)
             print('Median trans for', f, ':', np.median(T.ap_transparency[I]))
+            I = np.flatnonzero(T.filter == f)
+            yl,yh = 0.5, 1.5
+
+            for j,name in enumerate(meta['chipnames']):
+                plt.plot((T.expnum + T.guideframe/150)[I],
+                         np.clip(T.ap_transparency[I, j], yl, yh),
+                         '.', ms=1, label='%s in %s' % (f, name))
+
             tr = []
             ee = np.unique(T.expnum[T.filter == f])
             for e in ee:
                 tr.append(np.median(T.ap_transparency[(T.expnum == e)[:,np.newaxis] * T.use_for_zpt]))
-            plt.plot(ee, tr, 'r.')
-            I = np.flatnonzero(T.filter == f)
-            yl,yh = 0., 1.5
-            plt.scatter((T.expnum + T.guideframe/150)[I, np.newaxis].repeat(nguide,axis=1),
-                        np.clip(T.ap_transparency[I,:], yl, yh),
-                        s=1)
+            plt.plot(ee, tr, 'k.-')
+            # plt.plot((T.expnum + T.guideframe/150)[I, np.newaxis].repeat(nguide,axis=1),
+            #          np.clip(T.ap_transparency[I,:], yl, yh),
+            #          '.', ms=1, label=f)
+            plt.legend(fontsize=8)
             plt.xlim(elo,ehi)
             plt.ylim(yl,yh)
             if i == 1:
@@ -317,7 +357,12 @@ def main():
                 plt.xlabel('Expnum')
             else:
                 plt.xticks([])
+        plt.suptitle('Guider data, 2024-02-28: Transparency')
         plt.savefig('trends2.png')
+
+        d_apsky = T.apskies.copy()
+        d_apsky [1:,:] = np.diff(d_apsky , axis=0)
+        #print('d_apsky:', d_apsky)
 
         filts = np.unique(T.filter)
         for f in filts:
@@ -339,13 +384,19 @@ def main():
             #y = (T.instmags - T.ref_mags)[I]
             y = (T.ap_instmags - T.ref_mags)[I]
             m = np.median(y)
+            sk = d_apsky[I]
+            mn,mx = np.percentile(sk, [5,95])
             plt.scatter((T.bp - T.rp)[I], np.clip(y, m-1, m+1), s=1,
-                        c = T.g[I])
+                        c = T.xx[I] % 1024)
+            #c = d_apsky[I], vmin=mn, vmax=mx)
+            #c = T.g[I])
             #c=np.minimum(T.gaia_bp_snr, T.gaia_rp_snr)[I],
             #vmin=0, vmax=50)
             cb = plt.colorbar()
             #cb.set_label('BP/RP S/N')
-            cb.set_label('Gaia G')
+            #cb.set_label('Gaia G')
+            #cb.set_label('Sky')
+            cb.set_label('x (mod 1024)')
             plt.xlabel('BP - RP')
             plt.ylabel('ApInstmag - (G+color)')
 
@@ -357,6 +408,8 @@ def main():
             # cb.set_label('Gaia BP-RP')
             plt.suptitle('2024-02-28: filter %s' % f)
             plt.savefig('trends-%s.png' % f)
+
+        T.writeto('guider-2024-02-28.fits')
         return
 
     threads = 4
@@ -364,11 +417,12 @@ def main():
     from astrometry.util.multiproc import multiproc
     mp = multiproc(threads)
 
-    expnums = [1278635]
-    
+    #expnums = [1278635]
+    expnums = [1278649]
+
     mp.map(bounce_one_expnum, expnums)
     return
-    
+
     for expnum in expnums:
         #     #if expnum < 1278723:
         #     #    continue
@@ -424,20 +478,33 @@ def run_expnum(expnum):
     t = fitsio.read_header(fn)['UTSHUT'] #= '2024-02-29T01:45:30.524' / exp start
     time0 = datetime.strptime(t, "%Y-%m-%dT%H:%M:%S.%f")
 
+    # Measure row-wise median per amp
+    #plt.clf()
     for i,img in enumerate(imgs):
-        # Remove ampwise medians
-        bl = np.median(img[:,:1024])
-        br = np.median(img[:,1024:])
-        img[:,:1024] -= bl
-        img[:,1024:] -= br
-
-    # Remove row-wise median (to remove sky gradient)
-    skygrads = []
-    for i,img in enumerate(imgs):
-        g = np.median(img, axis=1)
-        img -= g[:, np.newaxis]
-        skygrads.append(g)
-        #plt.plot(g)
+        imgl = img[:,:1024]
+        imgr = img[:,1024:]
+        gl = np.median(imgl, axis=1)
+        gr = np.median(imgr, axis=1)
+        # omit top/bottom -- they have extra brightness
+        trim = 50
+        xx = np.arange(trim, len(gl)-trim)
+        # fit for slope
+        offl,slopel = fit_line_sad(xx, gl[trim:-trim])
+        offr,sloper = fit_line_sad(xx, gr[trim:-trim])
+        # subtract slope
+        img[trim:-trim, :1024] -= (offl + xx * slopel)[:, np.newaxis]
+        img[trim:-trim, 1024:] -= (offr + xx * sloper)[:, np.newaxis]
+        # top & bottom - just subtract row-wise medians.
+        img[:trim,  :1024] -= np.median(img[:trim , :1024], axis=1)[:, np.newaxis]
+        img[-trim:, :1024] -= np.median(img[-trim:, :1024], axis=1)[:, np.newaxis]
+        img[:trim,  1024:] -= np.median(img[:trim , 1024:], axis=1)[:, np.newaxis]
+        img[-trim:, 1024:] -= np.median(img[-trim:, 1024:], axis=1)[:, np.newaxis]
+        #p = plt.plot(gl)
+        #plt.plot(xx, offl + xx * slopel, 'k--')#, color=p[0].get_color())
+        #p = plt.plot(gr)
+        #plt.plot(xx, offr + xx * sloper, 'k--')#, color=p[0].get_color())
+    #plt.suptitle('Per-amp sky subtracted')
+    #ps.savefig()
 
     # Save to temp image, run astrometry
     wcses = []
