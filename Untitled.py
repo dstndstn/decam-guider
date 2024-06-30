@@ -12,8 +12,9 @@ from tractor import (PixPos, Flux, NCircularGaussianPSF, Image, PointSource,
 from astrometry.util.plotutils import PlotSequence
 from astrometry.util.util import Sip
 from astrometry.util.fits import fits_table, merge_tables
+from astrometry.libkd.spherematch import match_radec
 from legacypipe.gaiacat import GaiaCatalog
-    
+
 
 basedir = 'data-2024-02-28/guider_images/'
 tempdir = 'temp'
@@ -420,8 +421,8 @@ def main():
     #expnums = [1278635]
     expnums = [1278649]
 
-    mp.map(bounce_one_expnum, expnums)
-    return
+    #mp.map(bounce_one_expnum, expnums)
+    #return
 
     for expnum in expnums:
         #     #if expnum < 1278723:
@@ -433,10 +434,9 @@ def main():
         if R is None:
             continue
 
-        npzfn = 'guider-tractor-fit-%i.npz' % expnum
-        np.savez(npzfn, **R)
-        
-        plot_from_npz(expnum, npzfn)
+        # npzfn = 'guider-tractor-fit-%i.npz' % expnum
+        # np.savez(npzfn, **R)
+        # plot_from_npz(expnum, npzfn)
 
 def bounce_one_expnum(expnum):
     npzfn = 'guider-tractor-fit-%i.npz' % expnum
@@ -541,6 +541,196 @@ def run_expnum(expnum):
         cat = gaia.get_catalog_in_wcs(wcs)
         print(name, len(cat), 'Gaia')
         cats.append(cat)
+
+    # Grab the Astrometry.net detected stars list
+    # Match to Gaia and photometer them
+    plotdata = []
+    # subimage half-size
+    S = 25
+    ss = 2*S+1
+    sx = np.arange(ss)
+    sy = np.arange(ss)
+    rad = 20
+    starmask = np.hypot(sx[np.newaxis,:] - S, sy[:,np.newaxis] - S) > rad
+    ap_profiles = []
+
+    for j,(img,name,wcs,cat) in enumerate(zip(imgs, chipnames, wcses, cats)):
+        fn = os.path.join(tempdir, '%i-%s.axy' % (expnum, name))
+        if not os.path.exists(fn):
+            print('Does not exist:', fn)
+        xy = fits_table(fn)
+        print(len(xy), 'stars detected by Astrometry.net star finder')
+        print(len(cat), 'Gaia stars')
+        ra,dec = wcs.pixelxy2radec(xy.x + 1., xy.y + 1.)
+        # Match to Gaia
+        I,J,d = match_radec(ra, dec, cat.ra, cat.dec, 1./3600., nearest=True)
+        print(len(I), 'stars matched to Gaia')
+
+        # Estimate per-pixel noise via Blanton's "5"-pixel MAD
+        step = 5
+        slice1 = (slice(0,-5,step),slice(0,-5,step))
+        slice2 = (slice(5,None,step),slice(5,None,step))
+        mad = np.median(np.abs(img[slice1] - img[slice2]).ravel())
+        sig1 = 1.4826 * mad / np.sqrt(2.)
+
+        # Cut stars near the edges
+        H,W = img.shape
+        K = np.flatnonzero((xy.x[I] >= S) * (xy.y[I] >= S) *
+                           (xy.x[I] < (W-S)) * (xy.y[I] < (H-S)) *
+                           (cat.phot_g_mean_mag[J] != 0) *
+                           (cat.phot_bp_mean_mag[J] != 0) *
+                           (cat.phot_rp_mean_mag[J] != 0))
+        I = I[K]
+        J = J[K]
+        K = np.argsort(cat.phot_g_mean_mag[J])
+        I = I[K]
+        J = J[K]
+
+        med = np.median(img)
+
+        if j == 0:
+            plt.clf()
+            plt.subplots_adjust(hspace=0, wspace=0)
+        fluxes = []
+        apfluxes = []
+        apfluxes2 = []
+        psfw = []
+        for i,(x,y) in enumerate(zip(xy.x[I], xy.y[I])):
+            ix,iy = int(x),int(y)
+            subimg = img[iy-S:iy+S+1, ix-S:ix+S+1]
+            #print('subimg shape', subimg.shape)
+            h,w = subimg.shape
+            tim = Image(subimg, inverr=np.ones_like(subimg)/sig1,
+                        psf=NCircularGaussianPSF([2.], [1.]),
+                        sky=ConstantSky(med))
+            tim.psf.freezeParam('weights')
+            tim.sig1 = sig1
+            flux = np.sum(subimg) - med * h*w
+            flux = max(flux, 100)
+            src = PointSource(PixPos(S, S), Flux(flux))
+            tr = Tractor([tim], [src])
+            X = tr.optimize_loop()
+            fluxes.append(src.getBrightness().val)
+            psfw.append(tr.getParams()[0])
+
+            # Aperture sky
+            apsky = np.median(subimg[starmask])
+            # Aperture photometry
+            apxy = np.array([[S, S],])
+            ap = []
+            aprad_pix = 15.
+            aper = photutils.aperture.CircularAperture(apxy, aprad_pix)
+            p = photutils.aperture.aperture_photometry(subimg - apsky, aper)
+            ap_profiles.append((subimg - apsky)[S, :])
+            apflux = p.field('aperture_sum')
+            apflux = float(apflux.data[0])
+            apfluxes.append(apflux)
+
+            aprad_pix = 10.
+            aper = photutils.aperture.CircularAperture(apxy, aprad_pix)
+            p = photutils.aperture.aperture_photometry(subimg - apsky, aper)
+            apflux = p.field('aperture_sum')
+            apflux = float(apflux.data[0])
+            apfluxes2.append(apflux)
+
+            if j ==0 and i < 25:
+                plt.subplot(5, 10, 2*i + 1)
+                mn,mx = np.percentile(subimg.ravel(), [10,98])
+                ima = dict(interpolation='nearest', origin='lower', vmin=mn, vmax=mx)
+                plt.imshow(subimg, **ima)
+                plt.xticks([]); plt.yticks([])
+                plt.subplot(5, 10, 2*i + 2)
+                mod = tr.getModelImage(0)
+                plt.imshow(mod, **ima)
+                plt.xticks([]); plt.yticks([])
+        if j == 0:
+            ps.savefig()
+
+        flux = np.array(fluxes)
+        apflux = np.array(apfluxes)
+        apflux2 = np.array(apfluxes2)
+        instmag = -2.5 * np.log10(flux)
+        apinstmag = -2.5 * np.log10(apflux)
+        apinstmag2 = -2.5 * np.log10(apflux2)
+        g = cat.phot_g_mean_mag[J]
+        bp = cat.phot_bp_mean_mag[J]
+        rp = cat.phot_rp_mean_mag[J]
+
+        plotdata.append((instmag, apinstmag, apinstmag2, g, bp, rp, np.array(psfw)))
+
+    plt.clf()
+    for p in ap_profiles:
+        plt.plot(p, alpha=0.1)
+    plt.title('Aperture photometry: profiles')
+    plt.yscale('symlog', linthresh=40)
+    ps.savefig()
+
+    colorx = np.linspace(0.4, 2.5, 25)
+    colory = np.zeros_like(colorx)
+    colorterm = gaia_color_terms.get(filt, None)
+    if colorterm is not None:
+        gaia_band, (c_lo,c_hi), poly = colorterm
+        bprp = np.clip(colorx, c_lo, c_hi)
+        colorterm = 0.
+        for i,c in enumerate(poly):
+            colorterm = colorterm + c * bprp**i
+        colory = colorterm
+
+    ylo,yhi = -26, -24.5
+    xx = []
+    yy = []
+    yy2 = []
+    yy3 = []
+    cc = []
+    for instmag,apinstmag,apinstmag2,g,bp,rp,psfw in plotdata:
+        #plt.plot(bp - rp, np.clip(instmag - g, ylo, yhi), '.')
+        xx.append(bp-rp)
+        yy.append(instmag - g)
+        yy2.append(apinstmag - g)
+        yy3.append(apinstmag2 - g)
+        cc.append(psfw)
+    cc = np.hstack(cc)
+    yy = np.hstack(yy)
+    yy2 = np.hstack(yy2)
+    yy3 = np.hstack(yy3)
+    clo,chi = np.percentile(cc[(yy > ylo) * (yy < yhi)], [5,95])
+    plt.clf()
+    plt.scatter(np.hstack(xx), np.clip(yy, ylo, yhi), c=cc,
+                vmin=clo, vmax=chi, s=4)
+    #ax = plt.axis()
+    #print('color', colorx, colory)
+    #print('shifted', colory - np.median(colory) + np.median(yy[np.isfinite(yy)]))
+    #plt.plot(colorx, colory - np.median(colory) + np.median(yy[np.isfinite(yy)]), 'k-')
+    #plt.axis(ax)
+    cb = plt.colorbar()
+    cb.set_label('PSF size')
+    plt.xlabel('Gaia Bp - Rp (mag)')
+    plt.ylabel('Guider inst mag. - G (mag)')
+    plt.title('Full-frame guider image (tractor phot)')
+    plt.ylim(ylo, yhi)
+    ps.savefig()
+
+    plt.clf()
+    plt.scatter(np.hstack(xx), np.clip(yy2, ylo, yhi), c=cc,
+                vmin=clo, vmax=chi, s=4)
+    cb = plt.colorbar()
+    cb.set_label('PSF size')
+    plt.xlabel('Gaia Bp - Rp (mag)')
+    plt.ylabel('Guider inst mag. - G (mag)')
+    plt.title('Full-frame guider image (ap phot)')
+    plt.ylim(ylo, yhi)
+    ps.savefig()
+
+    plt.clf()
+    plt.scatter(np.hstack(xx), np.clip(yy3, ylo, yhi), c=cc,
+                vmin=clo, vmax=chi, s=4)
+    cb = plt.colorbar()
+    cb.set_label('PSF size')
+    plt.xlabel('Gaia Bp - Rp (mag)')
+    plt.ylabel('Guider inst mag. - G (mag)')
+    plt.title('Full-frame guider image (ap phot 2)')
+    plt.ylim(ylo, yhi)
+    ps.savefig()
 
     ## The "_roi" image headers are useless...
     # The non-roi image header has:
