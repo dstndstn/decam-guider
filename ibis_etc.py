@@ -349,6 +349,9 @@ def process_acq_image(filename, astrometry_config_file, radec_boresight=None,
         #break
     #if got:
 
+    zp0 = None
+    kx = None
+
     dmags = []
     for chip in goodchips:
         meas,R = chipmeas[chip]
@@ -357,10 +360,19 @@ def process_acq_image(filename, astrometry_config_file, radec_boresight=None,
         exptime = R['exptime']
         apmag = -2.5 * np.log10(apflux / exptime)
         dmags.append(apmag - ref.mag)
+        if zp0 is None:
+            zp0 = meas.zeropoint_for_exposure(filt, ext=meas.ext, exptime=exptime,
+                                              primhdr=R['primhdr'])
+            kx = nominal_cal.fiducial_exptime(filt).k_co
     dmags = np.hstack(dmags)
     zpt = -np.median(dmags)
-    print('All chips: Zeropoint %.3f   (with %i stars)' % (zpt, len(dmags)))
+    print()
+    print('All chips:')
+    print('Zeropoint:    %.3f   (with %i stars)' % (zpt, len(dmags)))
     del dmags
+
+    transparency = 10.**(-0.4 * (zp0 - zpt - kx * (airmass - 1.)))
+    print('Transparency:  %.3f' % transparency)
 
     if debug:
         plt.clf()
@@ -429,13 +441,40 @@ def process_acq_image(filename, astrometry_config_file, radec_boresight=None,
         ps.savefig()
 
 
-
+def process_roi_image(state, roi_settings, roifn):
+    pass
 
 
 
 if __name__ == '__main__':
-    process_acq_image('data-ETC/DECam_guider_1336360/DECam_guider_1336360_00000000.fits.gz',
-                      '~/data/INDEXES/5200/cfg',
-                      radec_boresight=(351.5373, -1.539),
-                      airmass = 1.15,
-                      debug=True)
+    expnum = 1336361
+
+    #acqfn = 'data-ETC/DECam_guider_%i/DECam_guider_%i_00000000.fits.gz' % (expnum, expnum)
+    acqfn = '~/ibis-data-transfer/guider-acq/DECam_guider_%i/DECam_guider_%i_00000000.fits.gz' % (expnum, expnum)
+
+    # 1336360:
+    #kwa = dict(
+    #    radec_boresight=(351.5373, -1.539),
+    #    airmass = 1.15)
+
+    # 1336361: M438
+    kwa = dict(
+        radec_boresight=(34.8773, -6.181),
+        airmass = 1.65)
+
+    astrometry_index_file = '~/data/INDEXES/5200/cfg'
+    acq = process_acq_image(acqfn, astrometry_index_file,
+                            debug=True,
+                            **kwa)
+
+    #roi_settings = {"roi": {"GS1": [1581.9344, 495.1462], "GN2": [1536.8226, 805.9154], "GS2": [195.65, 441.155], "GN1": [1522.0468, 1737.2205]}, "expid": 1336360}
+    #roi_selected(acq, roi_settings)
+    import json
+    roi_settings = json.load(open('/Users/dstn/ibis-data-transfer/guider-acq/roi_settings_%08i.dat' % expnum))
+
+    roinum = 1
+    roifn = '~/ibis-data-transfer/guider-sequences/%i/DECam_guider_%i_%08i.fits.gz' % (expnum, expnum, roinum)
+
+    state = acq
+
+    state = process_roi_image(state, roi_settings, roifn)
