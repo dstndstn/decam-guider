@@ -595,6 +595,7 @@ def run_expnum(expnum):
         apfluxes = []
         apfluxes2 = []
         psfw = []
+        tractors = []
         for i,(x,y) in enumerate(zip(xy.x[I], xy.y[I])):
             ix,iy = int(x),int(y)
             subimg = img[iy-S:iy+S+1, ix-S:ix+S+1]
@@ -612,7 +613,8 @@ def run_expnum(expnum):
             X = tr.optimize_loop()
             fluxes.append(src.getBrightness().val)
             psfw.append(tr.getParams()[0])
-
+            tractors.append(tr)
+            
             # Aperture sky
             apsky = np.median(subimg[starmask])
             # Aperture photometry
@@ -633,15 +635,23 @@ def run_expnum(expnum):
             apflux = float(apflux.data[0])
             apfluxes2.append(apflux)
 
-            if j ==0 and i < 25:
-                plt.subplot(5, 10, 2*i + 1)
+            if j == 0 and i < 15:
+                #plt.subplot(5, 10, 2*i + 1)
+                plt.subplot(5, 9, 3*i + 1)
                 mn,mx = np.percentile(subimg.ravel(), [10,98])
                 ima = dict(interpolation='nearest', origin='lower', vmin=mn, vmax=mx)
                 plt.imshow(subimg, **ima)
                 plt.xticks([]); plt.yticks([])
-                plt.subplot(5, 10, 2*i + 2)
+                #plt.subplot(5, 10, 2*i + 2)
+                plt.subplot(5, 9, 3*i + 2)
                 mod = tr.getModelImage(0)
                 plt.imshow(mod, **ima)
+                plt.xticks([]); plt.yticks([])
+                plt.subplot(5, 9, 3*i + 3)
+                chi = (subimg - mod) / tim.sig1
+                mx = np.percentile(np.abs(chi.ravel()), 98)
+                plt.imshow(chi, interpolation='nearest', origin='lower',
+                           vmin=-mx, vmax=mx)
                 plt.xticks([]); plt.yticks([])
         if j == 0:
             ps.savefig()
@@ -656,8 +666,26 @@ def run_expnum(expnum):
         bp = cat.phot_bp_mean_mag[J]
         rp = cat.phot_rp_mean_mag[J]
 
-        plotdata.append((instmag, apinstmag, apinstmag2, g, bp, rp, np.array(psfw)))
+        # Repeat the fitting with a fixed PSF width per chip
+        medw = np.median(psfw)
+        fluxes2 = []
+        for tr in tractors:
+            tim = tr.images[0]
+            #print('PSF params before:', tim.psf.getParams())
+            tim.psf.setParams([medw])#, 1.])
+            #print('PSF params after:', tim.psf.getParams())
+            tim.freezeParam('psf')
+            #tr.freezeParam('images')
+            #print('Parameters:', tr.getParamNames())
+            X = tr.optimize_loop()
+            src = tr.catalog[0]
+            fluxes2.append(src.getBrightness().val)
 
+        flux2 = np.array(fluxes2)
+        instmag2 = -2.5 * np.log10(flux2)
+        plotdata.append((instmag, instmag2, apinstmag, apinstmag2,
+                         g, bp, rp, np.array(psfw)))
+        
     plt.clf()
     for p in ap_profiles:
         plt.plot(p, alpha=0.1)
@@ -681,18 +709,21 @@ def run_expnum(expnum):
     yy = []
     yy2 = []
     yy3 = []
+    yy4 = []
     cc = []
-    for instmag,apinstmag,apinstmag2,g,bp,rp,psfw in plotdata:
+    for instmag,instmag2,apinstmag,apinstmag2,g,bp,rp,psfw in plotdata:
         #plt.plot(bp - rp, np.clip(instmag - g, ylo, yhi), '.')
         xx.append(bp-rp)
         yy.append(instmag - g)
         yy2.append(apinstmag - g)
         yy3.append(apinstmag2 - g)
+        yy4.append(instmag2 - g)
         cc.append(psfw)
     cc = np.hstack(cc)
     yy = np.hstack(yy)
     yy2 = np.hstack(yy2)
     yy3 = np.hstack(yy3)
+    yy4 = np.hstack(yy4)
     clo,chi = np.percentile(cc[(yy > ylo) * (yy < yhi)], [5,95])
     plt.clf()
     plt.scatter(np.hstack(xx), np.clip(yy, ylo, yhi), c=cc,
@@ -707,6 +738,20 @@ def run_expnum(expnum):
     plt.xlabel('Gaia Bp - Rp (mag)')
     plt.ylabel('Guider inst mag. - G (mag)')
     plt.title('Full-frame guider image (tractor phot)')
+    plt.ylim(ylo, yhi)
+    ps.savefig()
+
+    plt.clf()
+    for i,(instmag,instmag2,apinstmag,apinstmag2,g,bp,rp,psfw) in enumerate(plotdata):
+        this_xx = bp - rp
+        this_yy4 = instmag2 - g
+        plt.plot(this_xx, np.clip(this_yy4, ylo, yhi), '.', label=chipnames[i])
+    #cb = plt.colorbar()
+    #cb.set_label('PSF size')
+    plt.legend()
+    plt.xlabel('Gaia Bp - Rp (mag)')
+    plt.ylabel('Guider inst mag. - G (mag)')
+    plt.title('Full-frame guider image (tractor phot 2)')
     plt.ylim(ylo, yhi)
     ps.savefig()
 
@@ -823,6 +868,7 @@ def run_expnum(expnum):
     #     continue
 
     plt.clf()
+    plt.subplots_adjust(hspace=0.15, wspace=0)    
     for i,img in enumerate(imgs):
         plt.subplot(2,2,i+1)
         mn,mx = np.percentile(img.ravel(), [25,99])
