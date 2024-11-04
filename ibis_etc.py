@@ -19,6 +19,7 @@ import scipy.optimize
 from legacypipe.ps1cat import ps1_to_decam
 
 import tractor
+import photutils
 
 # Remove a V-shape pattern (MAGIC number)
 guider_horiz_slope = 0.00188866
@@ -194,6 +195,7 @@ class DECamGuiderMeasurer(RawMeasurer):
 
 def process_acq_image(filename, astrometry_config_file, radec_boresight=None,
                       airmass=None,
+                      procdir = 'data-processed',
                       debug=False):
     '''
     Arguments:
@@ -211,7 +213,6 @@ def process_acq_image(filename, astrometry_config_file, radec_boresight=None,
     state.update(chipnames=chipnames, expnum=expnum, filt=filt,
                  imgs=dict([(name,img) for name,img in zip(chipnames, imgs)]))
 
-    procdir = 'data-processed'
     if not os.path.exists(procdir):
         try:
             os.makedirs(procdir)
@@ -574,7 +575,7 @@ def process_roi_image(state, roi_settings, roi_num, roi_filename,
 
                 #print('Chip', chipname, 'amp', k+1, ': bias shape', bias.shape)
                 plt.subplot(2,4, hdu)
-                mn = np.min(np.median(bias, axis=1))
+                mn = np.percentile(np.median(bias, axis=1), 5)
                 plt.imshow(bias, interpolation='nearest', origin='lower', vmin=mn, vmax=mn+250)
                  
                 # The bottom ~10 rows are much brighter; but use 25 to match data
@@ -595,7 +596,7 @@ def process_roi_image(state, roi_settings, roi_num, roi_filename,
         plt.clf()
         for i,img in enumerate(dataimgs):
             plt.subplot(2, 4, i+1)
-            mn = np.min(np.median(img, axis=1))
+            mn = np.percentile(np.median(img, axis=1), 5)
             plt.imshow(img, interpolation='nearest', origin='lower', aspect='auto', vmin=mn, vmax=mn+250)
         plt.suptitle('Data')
         ps.savefig()
@@ -624,15 +625,26 @@ def process_roi_image(state, roi_settings, roi_num, roi_filename,
     chips,imgs,phdr,biases = assemble_full_frames(roi_filename, drop_bias_rows=20)
 
     # The bottom ~20-25 rows have a strong ramp, even after bias subtraction.
+    # The top row can also go wonky!
     # Estimate the sky level in the remaining pixels
-    sky = np.median(np.hstack([img[25:,:] for img in imgs]))
+    sky = np.median(np.hstack([img[25:-1,:] for img in imgs]))
     print('Median sky level:', sky)
     if not 'roi_sky' in state:
         state['roi_sky'] = []
     state['roi_sky'].append(sky)
 
+    if not 'strip_skies' in state:
+        state['strip_skies'] = dict((chip,[]) for chip in chips)
+
+    for chip,img in zip(chips,imgs):
+        state['strip_skies'][chip].append(np.median(img[25:,:]))
+
     print('Median sky per chip:',
           ', '.join(['%.2f' % np.median(img[25:,:]) for img in imgs]))
+
+    # for chip,img in zip(chips,imgs):
+    #     print(chip, '       Top row median:', np.median(img[-1,:]))
+    #     print(chip, 'Second-top row median:', np.median(img[-2,:]))
 
     if debug:
         plt.clf()
@@ -688,10 +700,10 @@ def process_roi_image(state, roi_settings, roi_num, roi_filename,
         plt.suptitle('bias- and median- and V-subtracted images')
         ps.savefig()
 
-    # Trim the bottom (bright) pixels off
+    # Trim the bottom (bright) pixels off; trim one pixel off the top too!
     Ntrim = 18
     orig_h = imgs[0].shape[0]
-    imgs = [img[Ntrim:, :] for img in imgs]
+    imgs = [img[Ntrim:-1, :] for img in imgs]
 
     roi_xsize = 25
     roi_imgs = {}
@@ -743,11 +755,14 @@ def process_roi_image(state, roi_settings, roi_num, roi_filename,
     if debug:
         plt.clf()
 
+    orig_roi_imgs = dict((k,v.copy()) for k,v in roi_imgs.items())
+
     for i,chip in enumerate(goodchips):
         if not first_time:
             tr = tractors[chip]
             tim = tr.images[0]
             # Accumulate ROI image
+            #print('Accumulating ROI image: ROI sum for', chip, ':', np.sum(roi_imgs[chip]))
             tim.data += roi_imgs[chip]
             roi_imgs[chip] = tim.data
         roi_img = roi_imgs[chip]
@@ -781,15 +796,23 @@ def process_roi_image(state, roi_settings, roi_num, roi_filename,
             tr.optimize_loop(shared_params=False)
 
         if debug:
-            plt.subplot(3, 4, 1+i)
+            plt.subplot(4, 4, 1+i)
+            mx = np.percentile(orig_roi_imgs[chip].ravel(), 95)
+            plt.imshow(orig_roi_imgs[chip], interpolation='nearest', origin='lower',
+                       vmin=-5, vmax=mx)
+            plt.title(chip + ' new ROI')
+
+            plt.subplot(4, 4, 5+i)
             mx = np.percentile(roi_img.ravel(), 95)
             plt.imshow(roi_img, interpolation='nearest', origin='lower',
                        vmin=sky-3.*sig1, vmax=mx)
-            
-            plt.subplot(3, 4, 1+i+4)
+            plt.title(chip + ' acc ROI')
+
+            plt.subplot(4, 4, 9+i)
             mod = tr.getModelImage(0)
             plt.imshow(mod, interpolation='nearest', origin='lower',
                        vmin=sky-3.*sig1, vmax=mx)
+            plt.title(chip + ' init mod')
         opt_args = dict(shared_params=False)
         X = tr.optimize_loop(**opt_args)
         s = tim.psf.getParams()[0]
@@ -799,10 +822,11 @@ def process_roi_image(state, roi_settings, roi_num, roi_filename,
             tr.optimize_loop(**opt_args)
 
         if debug:
-            plt.subplot(3, 4, 1+i+8)
+            plt.subplot(4, 4, 13+i)
             mod = tr.getModelImage(0)
             plt.imshow(mod, interpolation='nearest', origin='lower',
                        vmin=sky-3.*sig1, vmax=mx)
+            plt.title(chip + ' final mod')
 
         if first_time:
             all_params[chip] = []
@@ -833,6 +857,7 @@ if __name__ == '__main__':
         radec_boresight=(34.8773, -6.181),
         airmass = 1.65)
 
+    procdir = 'data-processed'
     astrometry_index_file = '~/data/INDEXES/5200/cfg'
 
     #acqfn = 'data-ETC/DECam_guider_%i/DECam_guider_%i_00000000.fits.gz' % (expnum, expnum)
@@ -856,11 +881,57 @@ if __name__ == '__main__':
     for roi_num in range(1, 11):
         roi_filename = '~/ibis-data-transfer/guider-sequences/%i/DECam_guider_%i_%08i.fits.gz' % (expnum, expnum, roi_num)
         newstate = process_roi_image(state, roi_settings, roi_num, roi_filename,
-                                debug=False)#True)
+                                debug=True)
         state = newstate
 
+    from astrometry.util.plotutils import PlotSequence
+    ps = PlotSequence(os.path.join(procdir, 'roi-summary'))
+
+    goodchips = state['goodchips']
     
     roi_apfluxes = state['roi_apfluxes']
+    plt.clf()
+    for chip in goodchips:
+        plt.plot(roi_apfluxes[chip], '.-', label=chip)
+        plt.ylabel('Aperture fluxes')
+    plt.legend()
+    ps.savefig()
     
+    roi_apskies = state['roi_apskies']
+    plt.clf()
+    for chip in goodchips:
+        plt.plot(roi_apskies[chip], '.-', label=chip)
+        plt.ylabel('Aperture skies')
+    plt.legend()
+    ps.savefig()
 
+    strip_skies = state['strip_skies']
+    plt.clf()
+    for chip in goodchips:
+        plt.plot(strip_skies[chip], '.-', label=chip)
+        plt.ylabel('Strip skies')
+    plt.legend()
+    ps.savefig()
+
+    all_params = state['all_params']
+    paramnames = ['PSF sigma', 'Sky', 'X', 'Y', 'Flux']
+
+    plotparams = [(1,True), (0,False), (4,True)]
+    for p,delta in plotparams:
+        plt.clf()
+        for chip in goodchips:
+            plt.plot([params[p] for params in all_params[chip]], '.-', label=chip)
+        plt.ylabel(paramnames[p])
+        plt.legend()
+        ps.savefig()
+
+        if not delta:
+            continue
+        plt.clf()
+        for chip in goodchips:
+            plt.plot(np.diff([params[p] for params in all_params[chip]]), '.-', label=chip)
+        plt.ylabel('delta ' + paramnames[p])
+        plt.legend()
+        ps.savefig()
+    print('Flux0:', state['flux0'])
     
