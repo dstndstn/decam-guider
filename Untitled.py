@@ -134,10 +134,12 @@ def assemble_full_frames(fn):
             img = F[hdu].read()
             #print(img.shape)
             hdr = F[hdu].read_header()
+            biassec = hdr['BIASSEC'].strip('[]').split(',')
+            assert(len(biassec) == 2)
+            (x0,x1),(y0,y1) = [[int(x) for x in vi] for vi in [w.split(':') for w in biassec]]
+            bias = img[y0-1:y1, x0-1:x1]
             datasec = hdr['DATASEC'].strip('[]').split(',')
             assert(len(datasec) == 2)
-            #print(datasec)
-            #v = [w.split(':') for w in datasec]
             (x0,x1),(y0,y1) = [[int(x) for x in vi] for vi in [w.split(':') for w in datasec]]
             #print(v)
             #(x0,x1),(y0,y1) = [int(x) for x in [w.split(':') for w in datasec]]
