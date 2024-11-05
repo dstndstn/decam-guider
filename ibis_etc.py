@@ -97,6 +97,13 @@ class IbisEtc(object):
         self.tractor_fits = None
         self.roi_datetimes = None
         self.sci_times = None
+        self.inst_seeing = None
+        self.inst_sky = None
+        self.inst_transparency = None
+        self.cumul_seeing = None
+        self.cumul_sky = None
+        self.cumul_transparency = None
+        self.efftimes = None
 
     def process_guider_acq_image(self, acqfn,
                                  fake_header=None):
@@ -424,6 +431,13 @@ class IbisEtc(object):
             self.tractor_fits = dict((chip,[]) for chip in self.chipnames)
             self.roi_datetimes = []
             self.sci_times = []
+            self.inst_seeing = dict((chip,[]) for chip in self.chipnames)
+            self.inst_sky = dict((chip,[]) for chip in self.chipnames)
+            self.inst_transparency = dict((chip,[]) for chip in self.chipnames)
+            self.cumul_seeing = []
+            self.cumul_sky = []
+            self.cumul_transparency = []
+            self.efftimes = []
 
         F = fitsio.FITS(roi_filename, 'r')
         if self.debug:
@@ -642,38 +656,61 @@ class IbisEtc(object):
         if self.debug:
             self.ps.savefig()
 
-
         pixsc = nominal_cal.pixscale
         seeing = (np.mean([self.tractor_fits[chip][-1][TRACTOR_PARAM_PSFSIGMA]])
             * 2.35 * pixsc)
-        skyrates = np.mean([self.sci_acc_strip_skies[chip][-1]
+        skyrate = np.mean([self.sci_acc_strip_skies[chip][-1]
                            for chip in self.chipnames]) / self.sci_times[-1]
-        skybr = -2.5 * np.log10(skyrates /pixsc/pixsc) + self.nom_zp
+        skybr = -2.5 * np.log10(skyrate /pixsc/pixsc) + self.nom_zp
         # HACK -- arbitrary sky correction to match copilot
         skybr += DECamGuiderMeasurer.SKY_BRIGHTNESS_CORRECTION
+        skybr = np.mean(skybr)
 
         # cumulative, sci-averaged transparency
+        itrs = []
         trs = []
         for chip in self.chipnames:
             dflux = np.diff([params[TRACTOR_PARAM_FLUX]
                              for params in self.tractor_fits[chip]])
             flux0 = self.tractor_fits[chip][0][TRACTOR_PARAM_FLUX]
             tr = np.append(1., (dflux / flux0)) * self.transparency
+            itrs.append(tr[-1])
             dsci = np.append(self.sci_times[0], np.diff(self.sci_times))
             tr = np.cumsum(tr * dsci) / etc.sci_times
             trs.append(tr[-1])
         trans = np.mean(trs)
 
-        skybright = np.mean(skybr)
+        # Instantaneous
+        for i,chip in enumerate(self.chipnames):
+            if len(self.sci_times) > 1:
+                iskyrate = ((self.sci_acc_strip_skies[chip][-1] - self.sci_acc_strip_skies[chip][-2]) /
+                            (self.sci_times[-1] - self.sci_times[-2]))
+            else:
+                iskyrate = self.sci_acc_strip_skies[chip][-1] / self.sci_times[-1]
+            iskybr = -2.5 * np.log10(iskyrate /pixsc/pixsc) + self.nom_zp
+            # HACK -- arbitrary sky correction to match copilot
+            iskybr += DECamGuiderMeasurer.SKY_BRIGHTNESS_CORRECTION
+            self.inst_sky[chip].append(iskybr)
+
+            isee = self.tractor_fits[chip][-1][TRACTOR_PARAM_PSFSIGMA] * 2.35 * pixsc
+            self.inst_seeing[chip].append(isee)
+
+            self.inst_transparency[chip].append(itrs[i])
+
         fid = nominal_cal.fiducial_exptime(self.filt)
         expfactor = exposure_factor(fid, nominal_cal, self.airmass, self.ebv,
-                                    seeing, skybright, trans)
+                                    seeing, skybr, trans)
         efftime = self.sci_times[-1] / expfactor
         print('ROI', roi_num, 'sci exp time %.1f sec' % self.sci_times[-1],
               'efftime %.1f sec' % efftime,
               'seeing %.2f arcsec,' % seeing,
               'sky %.2f mag/arcsec^2,' % skybr,
               'transparency %.1f %%' % (100.*trans))
+
+        self.cumul_sky.append(skybr)
+        self.cumul_transparency.append(trans)
+        self.cumul_seeing.append(seeing)
+        self.efftimes.append(efftime)
 
     def roi_debug_plots(self, F):
         nguide = 4
@@ -1111,59 +1148,68 @@ if __name__ == '__main__':
     # plt.legend()
     # ps.savefig()
 
-    all_params = etc.tractor_fits
-    paramnames = ['PSF sigma', 'Sky', 'X', 'Y', 'Flux']
+    # all_params = etc.tractor_fits
+    # paramnames = ['PSF sigma', 'Sky', 'X', 'Y', 'Flux']
+    # plotparams = [
+    #     #(TRACTOR_PARAM_SKY,True),
+    #     (TRACTOR_PARAM_PSFSIGMA,False),
+    #     #(TRACTOR_PARAM_FLUX,True)
+    #     ]
+    # for p,delta in plotparams:
+    #     plt.clf()
+    #     for chip in etc.chipnames:
+    #         plt.plot([params[p] for params in all_params[chip]], '.-', label=chip)
+    #     plt.ylabel('tractor ' + paramnames[p])
+    #     plt.legend()
+    #     ps.savefig()
+    # 
+    #     if not delta:
+    #         continue
+    #     plt.clf()
+    #     for chip in etc.chipnames:
+    #         pl = plt.plot(np.diff([params[p] for params in all_params[chip]]), '.-', label=chip)
+    #         if p == TRACTOR_PARAM_FLUX:
+    #             plt.axhline(all_params[chip][0][p], linestyle='--', color=pl[0].get_color())
+    #     plt.ylabel('tractor delta ' + paramnames[p])
+    #     
+    #     plt.legend()
+    #     ps.savefig()
 
-    plotparams = [
-        #(TRACTOR_PARAM_SKY,True),
-        (TRACTOR_PARAM_PSFSIGMA,False),
-        (TRACTOR_PARAM_FLUX,True)
-        ]
-    for p,delta in plotparams:
-        plt.clf()
-        for chip in etc.chipnames:
-            plt.plot([params[p] for params in all_params[chip]], '.-', label=chip)
-        plt.ylabel('tractor ' + paramnames[p])
-        plt.legend()
-        ps.savefig()
-
-        if not delta:
-            continue
-        plt.clf()
-        for chip in etc.chipnames:
-            pl = plt.plot(np.diff([params[p] for params in all_params[chip]]), '.-', label=chip)
-            if p == TRACTOR_PARAM_FLUX:
-                plt.axhline(all_params[chip][0][p], linestyle='--', color=pl[0].get_color())
-        plt.ylabel('tractor delta ' + paramnames[p])
-        
-        plt.legend()
-        ps.savefig()
-
-    # Per-exposure transparency estimates
-    exp_transparencies = {}
     plt.clf()
     for chip in etc.chipnames:
-        dflux = np.diff([params[TRACTOR_PARAM_FLUX] for params in all_params[chip]])
-        flux0 = all_params[chip][0][TRACTOR_PARAM_FLUX]
-        tr = np.append(1., (dflux / flux0)) * etc.transparency
-        exp_transparencies[chip] = tr
-        plt.plot(tr, '.-', label=chip)
+        plt.plot(etc.sci_times, etc.inst_seeing[chip], '.-', label=chip)
+    plt.legend()
+    plt.xlabel('Science exposure time (sec)')
+    plt.ylabel('Accumulated Seeing (arcsec)')
+    ps.savefig()
+
+    plt.clf()
+    for chip in etc.chipnames:
+        plt.plot(etc.sci_times, etc.inst_transparency[chip], '.-', label=chip)
+    plt.legend()
+    plt.xlabel('Science exposure time (sec)')
     plt.ylabel('Transparency (instantaneous)')
-    plt.legend()
     ps.savefig()
 
-    # Cumulative science-exposure-time-weighted transparency estimate
-    transparencies = {}
-    dsci = np.append(etc.sci_times[0], np.diff(etc.sci_times))
     plt.clf()
-    for chip in etc.chipnames:
-        tr = exp_transparencies[chip]
-        tr = np.cumsum(tr * dsci) / etc.sci_times
-        transparencies[chip] = tr
-        plt.plot(tr, '.-', label=chip)
-    plt.ylabel('Transparency (cumulative)')
+    plt.plot(etc.sci_times, etc.cumul_transparency, 'k.-')
     plt.legend()
+    plt.xlabel('Science exposure time (sec)')
+    plt.ylabel('Transparency (cumulative)')
     ps.savefig()
+
+
+    # # Cumulative science-exposure-time-weighted transparency estimate
+    # transparencies = {}
+    # dsci = np.append(etc.sci_times[0], np.diff(etc.sci_times))
+    # plt.clf()
+    # for chip in etc.chipnames:
+    #     tr = exp_transparencies[chip]
+    #     tr = np.cumsum(tr * dsci) / etc.sci_times
+    #     transparencies[chip] = tr
+    #     plt.plot(tr, '.-', label=chip)
+    # plt.ylabel('Transparency (cumulative)')
+    # ps.savefig()
 
     # # Estimate total sky accumulated in science image -- from tractor fits
     # tt = dict((chip,[]) for chip in etc.chipnames)
@@ -1210,34 +1256,49 @@ if __name__ == '__main__':
     # plt.legend()
     # ps.savefig()
 
+    # plt.clf()
+    # for chip in etc.chipnames:
+    #     plt.plot(np.append(0,etc.sci_times), np.append(0, etc.sci_acc_strip_skies[chip]), '.-', label=chip)
+    # plt.legend()
+    # plt.xlabel('Science exposure time (sec)')
+    # plt.ylabel('Predicted science image sky (counts)')
+    # #plt.title('from sci-weighted acc strip')
+    # ps.savefig()
+
+    # skybrights = {}
+    # plt.clf()
+    # for chip in etc.chipnames:
+    #     skyrate = np.array(etc.sci_acc_strip_skies[chip]) / np.array(etc.sci_times)
+    #     meas,R = etc.chipmeas[chip]
+    #     pixsc = R['pixscale']
+    #     skybr = -2.5 * np.log10(skyrate /pixsc/pixsc) + etc.nom_zp
+    # 
+    #     # HACK -- arbitrary sky correction to match copilot
+    #     skybr += DECamGuiderMeasurer.SKY_BRIGHTNESS_CORRECTION
+    # 
+    #     skybrights[chip] = skybr
+    #     print(chip, 'Final sky rate:', skyrate[-1])
+    #     plt.plot(etc.sci_times, skybr, '.-', label=chip)
+    # plt.xlabel('Science exposure time (sec)')
+    # plt.ylabel('Average sky brightness (mag/arcsec^2)')
+    # #plt.title('from sci-weighted acc strip')
+    # plt.legend()
+    # ps.savefig()
+
     plt.clf()
     for chip in etc.chipnames:
-        plt.plot(np.append(0,etc.sci_times), np.append(0, etc.sci_acc_strip_skies[chip]), '.-', label=chip)
+        plt.plot(etc.sci_times, etc.inst_sky[chip], '.-', label=chip)
     plt.legend()
     plt.xlabel('Science exposure time (sec)')
-    plt.ylabel('Predicted science image sky (counts)')
-    #plt.title('from sci-weighted acc strip')
+    plt.ylabel('Sky brightness (instantaneous) (mag/arcsec^2)')
     ps.savefig()
 
-    skybrights = {}
     plt.clf()
-    for chip in etc.chipnames:
-        skyrate = np.array(etc.sci_acc_strip_skies[chip]) / np.array(etc.sci_times)
-        meas,R = etc.chipmeas[chip]
-        pixsc = R['pixscale']
-        skybr = -2.5 * np.log10(skyrate /pixsc/pixsc) + etc.nom_zp
-
-        # HACK -- arbitrary sky correction to match copilot
-        skybr += DECamGuiderMeasurer.SKY_BRIGHTNESS_CORRECTION
-
-        skybrights[chip] = skybr
-        print(chip, 'Final sky rate:', skyrate[-1])
-        plt.plot(etc.sci_times, skybr, '.-', label=chip)
+    plt.plot(etc.sci_times, etc.cumul_sky, 'k.-')
     plt.xlabel('Science exposure time (sec)')
-    plt.ylabel('Average sky brightness (mag/arcsec^2)')
-    #plt.title('from sci-weighted acc strip')
-    plt.legend()
+    plt.ylabel('Sky brightness (cumulative) (mag/arcsec^2)')
     ps.savefig()
+    
 
     # Copilot terminology:
     # efftime = exptime / expfactor
@@ -1245,27 +1306,23 @@ if __name__ == '__main__':
     ebv = etc.ebv
     exptimes = np.array(etc.sci_times)
     expfactors = np.zeros(len(exptimes))
-    seeing_seq = np.zeros(len(exptimes))
-    skybright_seq = np.zeros(len(exptimes))
-    trans_seq = np.zeros(len(exptimes))
     for i in range(len(exptimes)):
-        seeing = np.mean([etc.tractor_fits[chip][i][TRACTOR_PARAM_PSFSIGMA]]) * 2.35 * pixsc
-        skybright = np.mean([skybrights[chip][i] for chip in etc.chipnames])
-        trans = np.mean([transparencies[chip][i] for chip in etc.chipnames])
         expfactor = exposure_factor(fid, nominal_cal, etc.airmass, ebv,
-                                    seeing, skybright, trans)
+                                    etc.cumul_seeing[i], etc.cumul_sky[i],
+                                    etc.cumul_transparency[i])
         expfactors[i] = expfactor
-        seeing_seq[i] = seeing
-        skybright_seq[i] = skybright
-        trans_seq[i] = trans
 
+    transp = np.vstack([etc.inst_transparency[chip] for chip in etc.chipnames]).mean(axis=0)
+    skybr = np.vstack([etc.inst_sky[chip] for chip in etc.chipnames]).mean(axis=0)
+
+    pixsc = nominal_cal.pixscale
     plt.clf()
     neff_fid = Neff(fid.seeing, pixsc)
-    neff     = Neff(seeing_seq, pixsc)
+    neff     = Neff(np.array(etc.cumul_seeing), pixsc)
     efftime_seeing = neff_fid / neff
-    efftime_trans = trans_seq**2
+    efftime_trans = transp**2
     efftime_airmass = 10.**-(0.8 * fid.k_co * (etc.airmass - 1.))
-    efftime_sky = 10.**(0.4 * (skybright_seq - fid.skybright))
+    efftime_sky = 10.**(0.4 * (skybr - fid.skybright))
     efftime_ebv = 10.**(-0.8 * fid.A_co * ebv)
     plt.semilogy(exptimes, efftime_seeing, '-', label='Seeing')
     plt.semilogy(exptimes, efftime_trans, '-', label='Transparency')
