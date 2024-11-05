@@ -8,6 +8,7 @@ import fitsio
 
 from astrometry.util.util import Sip
 
+from tractor.sfd import SFDMap
 #sys.path.insert(0, 'legacypipe/py')
 from legacypipe.ps1cat import ps1cat
 
@@ -15,6 +16,7 @@ from legacypipe.ps1cat import ps1cat
 sys.path.insert(0, 'obsbot')
 from measure_raw import RawMeasurer
 from camera_decam import nominal_cal
+from obsbot import exposure_factor, Neff
 
 import scipy.optimize
 from legacypipe.ps1cat import ps1_to_decam
@@ -23,6 +25,8 @@ import tractor
 import photutils
 
 from astrometry.util.starutil_numpy import hmsstring2ra, dmsstring2dec
+
+sfd = SFDMap()
 
 # Remove a V-shape pattern (MAGIC number)
 guider_horiz_slope = 0.00188866
@@ -67,6 +71,7 @@ class IbisEtc(object):
         self.roi_exptime = None
         self.expnum = None
         self.radec = None
+        self.ebv = None
         self.filt = None
         self.airmass = None
         self.chipnames = None
@@ -115,6 +120,7 @@ class IbisEtc(object):
         dec = dmsstring2dec(fake_header['DEC'])
         self.airmass = float(fake_header['AIRMASS'])
         self.radec = (ra, dec)
+        self.ebv = sfd.ebv(ra, dec)[0]
 
         print('Expnum', self.expnum, 'Filter', self.filt)
         self.chipnames = chipnames
@@ -631,11 +637,43 @@ class IbisEtc(object):
             self.roiflux = {}
             for chip in self.goodchips:
                 self.roiflux[chip] = self.tractor_fits[chip][-1][TRACTOR_PARAM_FLUX]
-                print(chip, 'Flux in first ROI image:', self.roiflux[chip])
+                #print(chip, 'Flux in first ROI image:', self.roiflux[chip])
 
         if self.debug:
             self.ps.savefig()
 
+
+        pixsc = nominal_cal.pixscale
+        seeing = (np.mean([self.tractor_fits[chip][-1][TRACTOR_PARAM_PSFSIGMA]])
+            * 2.35 * pixsc)
+        skyrates = np.mean([self.sci_acc_strip_skies[chip][-1]
+                           for chip in self.chipnames]) / self.sci_times[-1]
+        skybr = -2.5 * np.log10(skyrates /pixsc/pixsc) + self.nom_zp
+        # HACK -- arbitrary sky correction to match copilot
+        skybr += DECamGuiderMeasurer.SKY_BRIGHTNESS_CORRECTION
+
+        # cumulative, sci-averaged transparency
+        trs = []
+        for chip in self.chipnames:
+            dflux = np.diff([params[TRACTOR_PARAM_FLUX]
+                             for params in self.tractor_fits[chip]])
+            flux0 = self.tractor_fits[chip][0][TRACTOR_PARAM_FLUX]
+            tr = np.append(1., (dflux / flux0)) * self.transparency
+            dsci = np.append(self.sci_times[0], np.diff(self.sci_times))
+            tr = np.cumsum(tr * dsci) / etc.sci_times
+            trs.append(tr[-1])
+        trans = np.mean(trs)
+
+        skybright = np.mean(skybr)
+        fid = nominal_cal.fiducial_exptime(self.filt)
+        expfactor = exposure_factor(fid, nominal_cal, self.airmass, self.ebv,
+                                    seeing, skybright, trans)
+        efftime = self.sci_times[-1] / expfactor
+        print('ROI', roi_num, 'sci exp time %.1f sec' % self.sci_times[-1],
+              'efftime %.1f sec' % efftime,
+              'seeing %.2f arcsec,' % seeing,
+              'sky %.2f mag/arcsec^2,' % skybr,
+              'transparency %.1f %%' % (100.*trans))
 
     def roi_debug_plots(self, F):
         nguide = 4
@@ -776,7 +814,8 @@ def assemble_full_frames(fn, drop_bias_rows=48):
 class DECamGuiderMeasurer(RawMeasurer):
 
     ZEROPOINT_OFFSET = -2.5 * np.log10(2.24)
-    
+    SKY_BRIGHTNESS_CORRECTION = 1.21
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.edge_trim = 50
@@ -1187,6 +1226,10 @@ if __name__ == '__main__':
         meas,R = etc.chipmeas[chip]
         pixsc = R['pixscale']
         skybr = -2.5 * np.log10(skyrate /pixsc/pixsc) + etc.nom_zp
+
+        # HACK -- arbitrary sky correction to match copilot
+        skybr += DECamGuiderMeasurer.SKY_BRIGHTNESS_CORRECTION
+
         skybrights[chip] = skybr
         print(chip, 'Final sky rate:', skyrate[-1])
         plt.plot(etc.sci_times, skybr, '.-', label=chip)
@@ -1198,12 +1241,8 @@ if __name__ == '__main__':
 
     # Copilot terminology:
     # efftime = exptime / expfactor
-    from obsbot import exposure_factor, Neff
-    from tractor.sfd import SFDMap
     fid = nominal_cal.fiducial_exptime(etc.filt)
-    sfd = SFDMap()
-    ra,dec = etc.radec
-    ebv = sfd.ebv(ra, dec)[0]
+    ebv = etc.ebv
     exptimes = np.array(etc.sci_times)
     expfactors = np.zeros(len(exptimes))
     seeing_seq = np.zeros(len(exptimes))
