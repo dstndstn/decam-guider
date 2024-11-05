@@ -1,6 +1,6 @@
 import sys
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import numpy as np
 import pylab as plt
 
@@ -61,7 +61,10 @@ class IbisEtc(object):
 
     def clear_after_exposure(self):
         # Clear all the data associated with the current science exposure
-        self.acq_datetime
+        self.sci_datetime = None
+        self.acq_datetime = None
+        self.acq_exptime = None
+        self.roi_exptime = None
         self.expnum = None
         self.filt = None
         self.airmass = None
@@ -70,12 +73,16 @@ class IbisEtc(object):
         self.chipmeas = None
         self.transparency = None
         self.transmission = None
+        self.zp0 = None
         self.wcschips = None
         self.goodchips = None
         self.flux0 = None
+        self.acc_strips = None
         self.strip_skies = None
+        self.strip_sig1s = None
         self.roi_apfluxes = None
         self.roi_apskies = None
+        self.acc_rois = None
         self.tractors = None
         self.tractor_fits = None
         self.roi_datetimes = None
@@ -91,8 +98,10 @@ class IbisEtc(object):
         self.clear_after_exposure()
         print('Reading', acqfn)
         chipnames,imgs,phdr,biases = assemble_full_frames(acqfn)
+        # ASSUME that science image starts at the same time as the guider acq image
         self.acq_datetime = datetime_from_header(phdr)
-
+        self.sci_datetime = self.acq_datetime
+        self.acq_exptime = float(phdr['GEXPTIME'])
         self.expnum = int(phdr['EXPNUM'])
         self.filt = phdr['FILTER']
 
@@ -126,7 +135,7 @@ class IbisEtc(object):
             if os.path.exists(axyfn):
                 print('Exists:', axyfn, '-- assuming it will not solve')
                 continue
-    
+
             # Save images for each guider chip -- build header
             hdr = fitsio.FITSHDR()
             for k in ['UTSHUT', 'GEXPTIME', 'FILTER', 'EXPNUM']:
@@ -235,7 +244,7 @@ class IbisEtc(object):
         print('Transparency:  %.3f' % self.transparency)
         self.transmission = 10.**(-0.4 * (zp0 - zpt))
         print('Transmission:  %.3f' % self.transmission)
-
+        self.zp0 = zp0
         #state.update(chipmeas=chipmeas)
         #state.update(zpt0=zpt, seeing0=seeing, transparency0=transparency,
         #            nominal_zeropoint=zp0, transmission0=transmission)
@@ -390,25 +399,54 @@ class IbisEtc(object):
 
             # Init ROI data structures
 
+            self.acc_strips = {}
+            self.sci_acc_strips = {}
             self.strip_skies  = dict((chip,[]) for chip in self.chipnames)
+            self.strip_sig1s  = dict((chip,[]) for chip in self.chipnames)
+            self.acc_strip_sig1s  = dict((chip,[]) for chip in self.chipnames)
+            self.acc_strip_skies  = dict((chip,[]) for chip in self.chipnames)
+            self.sci_acc_strip_skies  = dict((chip,[]) for chip in self.chipnames)
             self.roi_apfluxes = dict((chip,[]) for chip in self.chipnames)
             self.roi_apskies  = dict((chip,[]) for chip in self.chipnames)
             self.tractors = {}
+            self.acc_rois = {}
             self.tractor_fits = dict((chip,[]) for chip in self.chipnames)
             self.roi_datetimes = []
+            self.sci_times = []
 
         F = fitsio.FITS(roi_filename, 'r')
         if self.debug:
             self.roi_debug_plots(F)
         chips,imgs,phdr,biases = assemble_full_frames(roi_filename, drop_bias_rows=20)
+        if first_time:
+            self.roi_exptime = float(phdr['GEXPTIME'])
+        else:
+            assert(self.roi_exptime == float(phdr['GEXPTIME']))
         dt = datetime_from_header(phdr)
         self.roi_datetimes.append(dt)
+        # How much exposure time has the science exposure had at the end of this guider
+        # frame?
+        self.sci_times.append((dt - self.sci_datetime).total_seconds() + self.roi_exptime)
 
         # The bottom ~20-25 rows have a strong ramp, even after bias subtraction.
         # The top row can also go wonky!
         # Estimate the sky level in the remaining pixels
         for chip,img in zip(chips,imgs):
-            self.strip_skies[chip].append(np.median(img[25:-1,:]))
+            subimg = img[25:-1, :]
+            self.strip_skies[chip].append(np.median(subimg))
+            self.strip_sig1s[chip].append(blanton_sky(subimg, step=3))
+            if not chip in self.acc_strips:
+                self.acc_strips[chip] = subimg.copy()
+                dt_sci = self.sci_times[0]
+                self.sci_acc_strips[chip] = dt_sci * subimg / self.roi_exptime
+            else:
+                self.acc_strips[chip] += subimg
+                dt_sci = self.sci_times[-1] - self.sci_times[-2]
+                self.sci_acc_strips[chip] += dt_sci * subimg / self.roi_exptime
+
+            self.acc_strip_sig1s[chip].append(blanton_sky(self.acc_strips[chip], step=3))
+            self.acc_strip_skies[chip].append(np.median(self.acc_strips[chip]))
+            self.sci_acc_strip_skies[chip].append(np.median(self.sci_acc_strips[chip]))
 
         # sky = np.median(np.hstack([img[25:-1,:] for img in imgs]))
         # print('Median sky level:', sky)
@@ -516,15 +554,8 @@ class IbisEtc(object):
                 tim.data += roi_imgs[chip]
                 roi_imgs[chip] = tim.data
             roi_img = roi_imgs[chip]
-
             # Estimate per-pixel noise via Blanton's MAD
-            step = 3
-            slice1 = (slice(0,-5,step),slice(0,-5,step))
-            slice2 = (slice(5,None,step),slice(5,None,step))
-            mad = np.median(np.abs(roi_img[slice1] - roi_img[slice2]).ravel())
-            sig1 = 1.4826 * mad / np.sqrt(2.)
-            #print('Chip', chip, 'sig1 %.3f' % sig1, 'max %.1f' % roi_img.max())
-    
+            sig1 = blanton_sky(roi_img, step=3)
             if first_time:
                 tim = tractor.Image(roi_img, inverr=np.ones_like(roi_img)/sig1,
                                     psf=tractor.NCircularGaussianPSF([2.], [1.]),
@@ -576,6 +607,8 @@ class IbisEtc(object):
                 plt.imshow(mod, interpolation='nearest', origin='lower',
                            vmin=sky-3.*sig1, vmax=mx)
                 plt.title(chip + ' fit mod')
+
+            self.acc_rois[chip] = (roi_img, tim.inverr, tr.getModelImage(0))
 
             self.tractor_fits[chip].append(tr.getParams())
             #  images.image0.psf.sigmas.param0 = 2.2991302175858706
@@ -661,6 +694,14 @@ def datetime_from_header(hdr):
     dt = datetime.strptime(t, "%Y-%m-%dT%H:%M:%S.%f")
     return dt
 
+def blanton_sky(img, dist=5, step=10):
+    # Estimate per-pixel noise via Blanton's 5-pixel MAD
+    slice1 = (slice(0,-dist,step),slice(0,-dist,step))
+    slice2 = (slice(dist,None,step),slice(dist,None,step))
+    mad = np.median(np.abs(img[slice1] - img[slice2]).ravel())
+    sig1 = 1.4826 * mad / np.sqrt(2.)
+    return sig1
+
 def assemble_full_frames(fn, drop_bias_rows=48):
     F = fitsio.FITS(fn, 'r')
     phdr = F[0].read_header()
@@ -728,11 +769,18 @@ class DECamGuiderMeasurer(RawMeasurer):
         self.edge_trim = 50
         # HACK
         self.airmass = 1.0
-        # HACK
-        #self.gain = 2.68
-        self.gain = 2.24
+        self.gain = 1.0
+
         # Star detection threshold
         self.det_thresh = 6.
+
+    def zeropoint_for_exposure(self, band, **kwa):
+        zp0 = super().zeropoint_for_exposure(band, **kwa)
+        # the superclass applies a GAIN
+        if zp0 is None:
+            return zp0
+        # HACK -- correct for GAIN difference.... shouldn't this be ~3.5 ???
+        return zp0 - 2.5 * np.log10(2.24)
 
     def read_raw(self, F, ext):
         img,hdr = super().read_raw(F, ext)
@@ -791,16 +839,7 @@ class DECamGuiderMeasurer(RawMeasurer):
 
         # Remove sky ramp
         skymod += (m * x)[:, np.newaxis]
-
-        # Estimate per-pixel noise via Blanton's 5-pixel MAD
-        slice1 = (slice(0,-5,10),slice(0,-5,10))
-        slice2 = (slice(5,None,10),slice(5,None,10))
-        #plt.clf()
-        #plt.hist(np.abs((img - skymod)[slice1] - (img - skymod)[slice2]).ravel())
-        #plt.title('pixel diffs')
-        #plt.show()
-        mad = np.median(np.abs(img[slice1] - img[slice2]).ravel())
-        sig1 = 1.4826 * mad / np.sqrt(2.)
+        sig1 = blanton_sky(img)
 
         if False:
             plt.clf()
@@ -937,21 +976,55 @@ if __name__ == '__main__':
     plt.clf()
     for chip in etc.chipnames:
         plt.plot(etc.roi_apfluxes[chip], '.-', label=chip)
-        plt.ylabel('Aperture fluxes')
+    plt.ylabel('Aperture fluxes')
     plt.legend()
     ps.savefig()
 
     plt.clf()
     for chip in etc.chipnames:
         plt.plot(etc.roi_apskies[chip], '.-', label=chip)
-        plt.ylabel('Aperture skies')
+    plt.ylabel('Aperture skies')
     plt.legend()
     ps.savefig()
 
     plt.clf()
     for chip in etc.chipnames:
         plt.plot(etc.strip_skies[chip], '.-', label=chip)
-        plt.ylabel('Strip skies')
+    plt.ylabel('Strip skies')
+    plt.legend()
+    ps.savefig()
+
+    plt.clf()
+    for chip in etc.chipnames:
+        plt.plot(etc.acc_strip_skies[chip], '.-', label=chip)
+    plt.ylabel('Accumulated strip skies')
+    plt.legend()
+    ps.savefig()
+
+    plt.clf()
+    for chip in etc.chipnames:
+        plt.plot(etc.acc_strip_sig1s[chip], '.-', label=chip)
+    plt.ylabel('Accumulated strip sig1s')
+    plt.legend()
+    ps.savefig()
+
+    plt.clf()
+    plt.subplots_adjust(hspace=0)
+    mx = np.percentile(np.hstack([x.ravel() for x in etc.acc_strips.values()]), 98)
+    for i,chip in enumerate(etc.chipnames):
+        plt.subplot(4,1,i+1)
+        plt.imshow(etc.acc_strips[chip], interpolation='nearest', origin='lower',
+                   aspect='auto', vmin=0, vmax=mx)
+        plt.xticks([]); plt.yticks([])
+        plt.ylabel(chip)
+    plt.suptitle('Accumulated strips')
+    ps.savefig()
+
+    plt.clf()
+    for chip in etc.chipnames:
+        plt.plot(np.cumsum(etc.strip_skies[chip]), etc.acc_strip_sig1s[chip], '.-', label=chip)
+    plt.xlabel('Accumulated Strip skies')
+    plt.ylabel('Accumulated Strip sig1s')
     plt.legend()
     ps.savefig()
 
@@ -963,7 +1036,7 @@ if __name__ == '__main__':
         plt.clf()
         for chip in etc.chipnames:
             plt.plot([params[p] for params in all_params[chip]], '.-', label=chip)
-        plt.ylabel(paramnames[p])
+        plt.ylabel('tractor ' + paramnames[p])
         plt.legend()
         ps.savefig()
 
@@ -971,8 +1044,106 @@ if __name__ == '__main__':
             continue
         plt.clf()
         for chip in etc.chipnames:
-            plt.plot(np.diff([params[p] for params in all_params[chip]]), '.-', label=chip)
-        plt.ylabel('delta ' + paramnames[p])
+            pl = plt.plot(np.diff([params[p] for params in all_params[chip]]), '.-', label=chip)
+            if p == TRACTOR_PARAM_FLUX:
+                plt.axhline(all_params[chip][0][p], linestyle='--', color=pl[0].get_color())
+        plt.ylabel('tractor delta ' + paramnames[p])
+        
         plt.legend()
         ps.savefig()
+
+    plt.clf()
+    for chip in etc.chipnames:
+        dflux = np.diff([params[TRACTOR_PARAM_FLUX] for params in all_params[chip]])
+        flux0 = all_params[chip][0][TRACTOR_PARAM_FLUX]
+        plt.plot(dflux / flux0 * etc.transparency, '.-', label=chip)
+    plt.ylabel('Transparency')
+    plt.legend()
+    ps.savefig()
+
+    # Estimate total sky accumulated in science image
+    tt = dict((chip,[]) for chip in etc.chipnames)
+    scisky = dict((chip,[]) for chip in etc.chipnames)
+    print('Acq image start:', etc.acq_datetime)
+    plt.clf()
+    for chip in etc.chipnames:
+        tt[chip].append(0)
+        scisky[chip].append(0)
+        meas,R = etc.chipmeas[chip]
+        exptime = R['exptime']
+        # First (actually second) ROI frame
+        # Time from science image start end of first ROI frame
+        first_roi = 0
+        dt = etc.roi_datetimes[first_roi] + timedelta(seconds=exptime) - etc.sci_datetime
+        dt = dt.total_seconds()
+        tt[chip].append(dt)
+        skyrate = etc.tractor_fits[chip][first_roi][TRACTOR_PARAM_SKY] / exptime
+        scisky[chip].append(dt * skyrate)
+        # Subsequent ROI frames - sky deltas
+        skydeltas = np.diff([params[TRACTOR_PARAM_SKY] for params in etc.tractor_fits[chip][first_roi:]])
+        skyrates = []
+        dts = []
+        for dsky,t,t_prev in zip(skydeltas, etc.roi_datetimes[first_roi+1:], etc.roi_datetimes[first_roi:]):
+            dt = (t - t_prev).total_seconds()
+            skyrate = dsky / exptime
+            skyrates.append(skyrate)
+            dts.append(dt)
+        tt[chip].extend(tt[chip][-1] + np.cumsum(dts))
+        scisky[chip].extend(scisky[chip][-1] + np.cumsum(np.array(dts) * np.array(skyrates)))
+        plt.plot(tt[chip], scisky[chip], '.-', label=chip)
+    plt.xlabel('Elapsed time (sec)')
+    plt.ylabel('Predicted science image sky (counts)')
+    ps.savefig()
+
+    plt.clf()
+    for chip in etc.chipnames:
+        plt.plot(etc.sci_times, etc.sci_acc_strip_skies[chip], '.-', label=chip)
+    plt.legend()
+    plt.xlabel('Science image exposure (sec)')
+    plt.ylabel('Predicted science image sky (counts)')
+    plt.title('from sci-weighted acc strip')
+    ps.savefig()
+
+    plt.clf()
+    for chip in etc.chipnames:
+        meas,R = etc.chipmeas[chip]
+        skyrate = np.array(etc.sci_acc_strip_skies[chip]) / np.array(etc.sci_times)
+        pixsc = R['pixscale']
+        skybr = -2.5 * np.log10(skyrate /pixsc/pixsc) + etc.zp0
+        plt.plot(etc.sci_times, skybr, '.-', label=chip)
+    plt.ylabel('Sky brightness (mag/arcsec^2)')
+    plt.title('from sci-weighted acc strip')
+    plt.legend()
+    ps.savefig()
+
+
+    plt.clf()
+    for chip in etc.chipnames:
+        meas,R = etc.chipmeas[chip]
+        skyrate = np.array(scisky[chip][1:]) / np.array(tt[chip][1:])
+        pixsc = R['pixscale']
+        skybr = -2.5 * np.log10(skyrate /pixsc/pixsc) + etc.zp0
+        plt.plot(tt[chip][1:], skybr, '.-', label=chip)
+    plt.ylabel('Sky brightness (mag/arcsec^2)')
+    plt.legend()
+    ps.savefig()
+
+    plt.clf()
+    for i,chip in enumerate(etc.chipnames):
+        img, ie, mod = etc.acc_rois[chip]
+        mn,mx = np.percentile(img, [25,98])
+        ima = dict(interpolation='nearest', origin='lower', vmin=0, vmax=mx)
+        plt.subplot(3,4, i+1)
+        plt.imshow(img, **ima)
+        plt.title(chip)
+        plt.xticks([]); plt.yticks([])
+        plt.subplot(3,4, i+5)
+        plt.imshow(mod, **ima)
+        plt.xticks([]); plt.yticks([])
+        plt.subplot(3,4, i+9)
+        plt.imshow((img - mod) * ie, interpolation='nearest', origin='lower',
+                   vmin=-10, vmax=+10)
+        plt.xticks([]); plt.yticks([])
+    plt.suptitle('Accumulated ROIs')
+    ps.savefig()
     
