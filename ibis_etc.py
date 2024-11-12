@@ -231,6 +231,7 @@ class IbisEtc(object):
                 meas.debug = True
                 meas.ps = self.ps
                 pass
+            kw.update(get_image=True)
 
             R = meas.run(**kw)
             self.chipmeas[chip] = (meas, R)
@@ -1010,51 +1011,86 @@ if __name__ == '__main__':
     import json
     import pickle
 
-    expnum = 1336361
-    # 1336360:
-    #kwa = dict(
-    #    radec_boresight=(351.5373, -1.539),
-    #    airmass = 1.15)
-    # 1336361: M438
-    kwa = dict(
-        radec_boresight=(34.8773, -6.181),
-        airmass = 1.65)
+    metadata = {}
+
+    from obsdb import django_setup
+    django_setup(database_filename='decam.sqlite3')
+    from obsdb.models import MeasuredCCD
+    for m in MeasuredCCD.objects.all():
+        metadata[m.expnum] = dict(radec_boresight=(m.rabore, m.decbore),
+                                  airmass=m.airmass)
+    print('Grabbed metadata for', len(metadata), 'exposures from copilot db')
 
     procdir = 'data-processed2'
-    astrometry_config_file = '~/data/INDEXES/5200/cfg'
-
-    #acqfn = 'data-ETC/DECam_guider_%i/DECam_guider_%i_00000000.fits.gz' % (expnum, expnum)
-    acqfn = '~/ibis-data-transfer/guider-acq/DECam_guider_%i/DECam_guider_%i_00000000.fits.gz' % (expnum, expnum)
-
     if not os.path.exists(procdir):
         try:
             os.makedirs(procdir)
         except:
             pass
 
-    statefn = 'state.pickle'
-    if not os.path.exists(statefn):
+    astrometry_config_file = '~/data/INDEXES/5200/cfg'
 
-        from astrometry.util.starutil import ra2hmsstring, dec2dmsstring
-        phdr = fitsio.read_header(acqfn)
-        fake_header = dict(RA=ra2hmsstring(kwa['radec_boresight'][0], separator=':'),
-                        DEC=dec2dmsstring(kwa['radec_boresight'][1], separator=':'),
-                        AIRMASS=kwa['airmass'],
-                        SCI_UT=phdr['UTSHUT'])
+    # expnum = 1336362
+    # # 1336360:
+    # #kwa = dict(
+    # #    radec_boresight=(351.5373, -1.539),
+    # #    airmass = 1.15)
+    # # 1336361: M438
+    # kwa = dict(
+    #     radec_boresight=(34.8773, -6.181),
+    #     airmass = 1.65)
 
-        etc = IbisEtc()
-        etc.configure(procdir, astrometry_config_file)
-        etc.set_plot_base('acq')
-        etc.process_guider_acq_image(acqfn, fake_header)
+    # 0.9-second GEXPTIME
+    #target_gexptime = 0.8
+    #for expnum in range(1336348, 1336450+1):
+    # 2.0-second GEXPTIME
+    target_gexptime = 2.0
+    for expnum in range(1336976, 1337017+1):
+        print('Expnum', expnum)
+        # Maybe no Astrometry.net index files... (not XMM field)
+        if expnum in [1336376, 1336413, 1336437, 1336438, 1336439, 1336440,
+                      1337014, 1337015, 1337016, 1337017]:
+            print('Skip')
+            continue
 
-        f = open(statefn,'wb')
-        pickle.dump(etc, f)
-        f.close()
-    else:
-        etc = pickle.load(open(statefn, 'rb'))
+        kwa = metadata[expnum]
 
+        acqfn = '~/ibis-data-transfer/guider-acq/DECam_guider_%i/DECam_guider_%i_00000000.fits.gz' % (expnum, expnum)
+        acqfn = os.path.expanduser(acqfn)
+        
+        if not os.path.exists(acqfn):
+            print('Does not exist:', acqfn)
+            continue
 
-    state2fn = 'state2.pickle'
+        hdr = fitsio.read_header(acqfn)
+        if float(hdr['GEXPTIME']) != target_gexptime:
+            continue
+        print('Filter', hdr['FILTER'])
+
+        statefn = 'state-%i.pickle' % expnum
+        if not os.path.exists(statefn):
+
+            from astrometry.util.starutil import ra2hmsstring, dec2dmsstring
+            phdr = fitsio.read_header(acqfn)
+            fake_header = dict(RA=ra2hmsstring(kwa['radec_boresight'][0], separator=':'),
+                            DEC=dec2dmsstring(kwa['radec_boresight'][1], separator=':'),
+                            AIRMASS=kwa['airmass'],
+                            SCI_UT=phdr['UTSHUT'])
+
+            etc = IbisEtc()
+            etc.configure(procdir, astrometry_config_file)
+            #etc.set_plot_base('acq-%i' % expnum)
+            etc.process_guider_acq_image(acqfn, fake_header)
+
+            f = open(statefn,'wb')
+            pickle.dump(etc, f)
+            f.close()
+        #else:
+        #    etc = pickle.load(open(statefn, 'rb'))
+
+    sys.exit(0)
+
+    state2fn = 'state2-%i.pickle' % expnum
     if not os.path.exists(state2fn):
 
         roi_settings = json.load(open('/Users/dstn/ibis-data-transfer/guider-acq/roi_settings_%08i.dat' % expnum))
@@ -1072,7 +1108,7 @@ if __name__ == '__main__':
         etc = pickle.load(open(state2fn, 'rb'))
 
     from astrometry.util.plotutils import PlotSequence
-    ps = PlotSequence(os.path.join(procdir, 'roi-summary'))
+    ps = PlotSequence(os.path.join(procdir, 'roi-summary-%i' % expnum))
 
     # plt.clf()
     # for chip in etc.chipnames:
