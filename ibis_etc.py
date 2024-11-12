@@ -268,14 +268,18 @@ class IbisEtc(object):
         print('Transmission:  %.3f' % self.transmission)
         self.nom_zp = zp0
 
+        for chip in self.wcschips:
+            meas,R = self.chipmeas[chip]
+            ref = R['refstars']
+            for i,b in enumerate('grizy'):
+                ref.set('ps1_mag_%s' % b, ref.median[:,i])
+
         if self.debug:
             plt.clf()
             diffs = []
             for chip in self.wcschips:
                 meas,R = self.chipmeas[chip]
                 ref = R['refstars']
-                for i,b in enumerate('grizy'):
-                    ref.set('ps1_mag_%s' % b, ref.median[:,i])
                 apflux = R['apflux']
                 exptime = R['exptime']
                 apmag = -2.5 * np.log10(apflux / exptime)
@@ -946,7 +950,7 @@ class DECamGuiderMeasurer(RawMeasurer):
             
             plt.clf()
             #plt.subplot(1,2,2)
-            mn,mx = np.percentile((img-skymod).ravel(), [5,95])
+            mn,mx = np.percentile((img-skymod).ravel(), [1,98])
             plt.imshow(img-skymod, interpolation='nearest', origin='lower', vmin=mn, vmax=mx)
             plt.colorbar()
             plt.title('Sky-sub image')
