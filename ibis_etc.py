@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 import numpy as np
 import pylab as plt
 
+import pyfftw
+
 import fitsio
 
 from astrometry.util.util import Sip
@@ -937,7 +939,6 @@ class DECamGuiderMeasurer(RawMeasurer):
 
         # Remove sky ramp
         skymod += (m * x)[:, np.newaxis]
-        sig1 = blanton_sky(img - skymod)
 
         if self.debug:
             plt.clf()
@@ -962,7 +963,78 @@ class DECamGuiderMeasurer(RawMeasurer):
             plt.legend()
             self.ps.savefig()
 
+        # Estimate noise on sky-subtracted image.
+        sig1a = blanton_sky(img - skymod)
+
+        pattern = self.estimate_pattern_noise(img - skymod)
+
+        if self.debug:
+            plt.clf()
+            plt.imshow(pattern, interpolation='nearest', origin='lower')
+            plt.colorbar()
+            plt.title('Pattern noise estimate')
+            self.ps.savefig()
+
+            plt.clf()
+            plt.imshow(img - skymod - pattern, interpolation='nearest', origin='lower',
+                       vmin=mn, vmax=mx)
+            plt.colorbar()
+            plt.title('(Sky+Pattern)-sub image')
+            self.ps.savefig()
+
+        # Estimate noise on sky-subtracted image.
+        sig1b = blanton_sky(img - skymod - pattern)
+
+        skymod += pattern
+
+        print('Estimate noise before & after pattern noise removal: %.1f, %.1f' % (sig1a, sig1b))
+        sig1 = sig1b
+
         return skymod, sky1, sig1
+
+    # Function to clean pattern noise from the input image
+    # from Doug Finkbeiner, 2024-11-03
+    def estimate_pattern_noise(self, img, rolloff_fraction=0.04, percentile=95.0,
+                               clipping=20.):
+        Ny, Nx = img.shape
+        Nh = Ny // 2  # half height of image
+        # clip bright pixels
+        imgmed = np.median(img.ravel())
+        img = np.minimum(img, imgmed + clipping)
+        # Pattern noise is symmetric about the center, so average the left and right halves
+        tot = 0.5 * (img + img[:, ::-1])
+        # Subtract mean of each row (could do better detrending here)
+        tot -= np.mean(tot, axis=1)[:, np.newaxis]
+        # Now apodize the bottom half of the image
+        apod = np.ones(Nh, dtype=np.float32)
+        ax = int(round(rolloff_fraction * Nh))
+        apod[:ax + 1] = 0.5 + 0.5 * np.cos(np.pi * (1 - np.arange(ax + 1) / ax))
+        apod[-(ax + 1):] = 0.5 + 0.5 * np.cos(np.pi * (np.arange(ax + 1) / ax))
+        # Apply apodization
+        tot[:, :Nh] *= apod[np.newaxis, :]
+        tot[:, Nh:] = 0.0
+        # Row by row FFT using real FFT (for speed improvement)
+        fimg = pyfftw.interfaces.numpy_fft.rfft(tot, axis=1)
+        # Fourier power
+        fpow = fimg.real**2 + fimg.imag**2
+        # if self.debug:
+        #     plt.clf()
+        #     plt.imshow(fpow, interpolation='nearest', origin='lower')
+        #     plt.title('Fourier power')
+        #     self.ps.savefig()
+        # Select the brightest pixels based on the given percentile for threshold
+        thresh = np.percentile(fpow[::8,:].ravel(), percentile)
+        # Mask for right half of Fourier domain
+        fmsk = fpow < thresh
+        fmsk[:, :16] = True  # Zero out the DC component
+        fmsk[:, -1] = True   # Zero out the Nyquist frequency
+        # Set values to zero based on the mask
+        fimg[fmsk] = 0
+        # Now do the inverse FFT
+        pattern = pyfftw.interfaces.numpy_fft.irfft(fimg, n=Nx, axis=1)
+        # Replace right half of pattern with left half, flipped
+        pattern[:, Nh:] = pattern[:, :Nh][:, ::-1]
+        return pattern
 
     def get_wcs(self, hdr):
         return self.wcs
