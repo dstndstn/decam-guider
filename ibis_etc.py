@@ -966,6 +966,9 @@ class DECamGuiderMeasurer(RawMeasurer):
         # Estimate noise on sky-subtracted image.
         sig1a = blanton_sky(img - skymod)
 
+        # Estimate noise on 2x2-binned sky-sub image
+        sig2a = blanton_sky(self.bin_image(img - skymod, 2))
+
         pattern = self.estimate_pattern_noise(img - skymod)
 
         if self.debug:
@@ -982,15 +985,63 @@ class DECamGuiderMeasurer(RawMeasurer):
             plt.title('(Sky+Pattern)-sub image')
             self.ps.savefig()
 
-        # Estimate noise on sky-subtracted image.
+            print('Trimmed image shape:', img.shape)
+            h,w = img.shape
+            plt.clf()
+            x0,x1, y0,y1 = w//2-250, w//2+500+1, 0, 500
+            slc = slice(y0, y1), slice(x0, x1)
+            ima = dict(interpolation='nearest', origin='lower', extent=[x0,x1,y0,y1],
+                       vmin=-3.*sig1a, vmax=+3.*sig1a)
+            plt.subplot(2,2,1)
+            plt.imshow(img[slc] - np.median(img[slc]), **ima)
+            plt.title('Image')
+            plt.subplot(2,2,2)
+            im = img[slc] - skymod[slc]
+            plt.imshow(im - np.median(im), **ima)
+            plt.title('Sky-sub')
+            plt.subplot(2,2,3)
+            im = pattern[slc]
+            plt.imshow(im - np.median(im), **ima)
+            plt.title('Pattern')
+            plt.subplot(2,2,4)
+            im = img[slc] - skymod[slc] - pattern[slc]
+            plt.imshow(im - np.median(im), **ima)
+            plt.title('Sky- and Pattern-sub')
+            self.ps.savefig()
+
+            plt.clf()
+            med = np.median(img - skymod)
+            ha = dict(range=(med-5.*sig1a, med+5.*sig1a), bins=50, histtype='step')
+            plt.hist((img - skymod).ravel(), label='Vanilla', **ha)
+            plt.hist((img - skymod - pattern).ravel(), label='Pattern noise removed', **ha)
+            plt.xlabel('Image pixel values (ADU)')
+            plt.legend()
+            self.ps.savefig()
+            
+
+        # Estimate noise on sky- and pattern-subtracted image.
         sig1b = blanton_sky(img - skymod - pattern)
+
+        # Estimate noise on 2x2-binned sky-sub image
+        sig2b = blanton_sky(self.bin_image(img - skymod - pattern, 2))
 
         skymod += pattern
 
-        print('Estimate noise before & after pattern noise removal: %.1f, %.1f' % (sig1a, sig1b))
+        print('Estimated noise before & after pattern noise removal: %.1f, %.1f' % (sig1a, sig1b))
+        print('Estimated noise on 2x2 binned image, before & after pattern noise removal: %.1f, %.1f' % (sig2a, sig2b))
         sig1 = sig1b
 
         return skymod, sky1, sig1
+
+    def bin_image(self, img, N):
+        h,w = img.shape
+        sh,sw = h//N, w//N
+        sub = np.zeros((sh,sw), np.float32)
+        for i in range(N):
+            for j in range(N):
+                sub += img[i::N, j::N]
+        sub /= N**2
+        return sub
 
     # Function to clean pattern noise from the input image
     # from Doug Finkbeiner, 2024-11-03
@@ -1145,6 +1196,7 @@ if __name__ == '__main__':
 
         statefn = 'state-%i.pickle' % expnum
         if not os.path.exists(statefn):
+        #if True:
 
             from astrometry.util.starutil import ra2hmsstring, dec2dmsstring
             phdr = fitsio.read_header(acqfn)
@@ -1155,7 +1207,7 @@ if __name__ == '__main__':
 
             etc = IbisEtc()
             etc.configure(procdir, astrometry_config_file)
-            #etc.set_plot_base('acq-%i' % expnum)
+            etc.set_plot_base('acq-%i' % expnum)
             etc.process_guider_acq_image(acqfn, fake_header)
 
             f = open(statefn,'wb')
