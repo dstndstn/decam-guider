@@ -988,7 +988,8 @@ class DECamGuiderMeasurer(RawMeasurer):
             print('Trimmed image shape:', img.shape)
             h,w = img.shape
             plt.clf()
-            x0,x1, y0,y1 = w//2-250, w//2+500+1, 0, 500
+            S = 150
+            x0,x1, y0,y1 = w//2-S//2, w//2+S//2+1, 0, S
             slc = slice(y0, y1), slice(x0, x1)
             ima = dict(interpolation='nearest', origin='lower', extent=[x0,x1,y0,y1],
                        vmin=-3.*sig1a, vmax=+3.*sig1a)
