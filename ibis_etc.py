@@ -3,6 +3,7 @@ import os
 from datetime import datetime, timedelta
 import numpy as np
 import pylab as plt
+import matplotlib
 
 import pyfftw
 
@@ -111,6 +112,7 @@ class IbisEtc(object):
         self.cumul_transparency = None
         self.efftimes = None
         self.first_roi_datetime = None
+        self.rois = None
 
     def process_guider_acq_image(self, acqfn,
                                  fake_header=None):
@@ -361,6 +363,9 @@ class IbisEtc(object):
             phdr = fitsio.read_header(roi_filename)
             troi = datetime_from_header(phdr)
             self.first_roi_datetime = troi
+
+            self.rois = roi_settings['roi']
+            
             return
 
         first_time = False
@@ -436,6 +441,7 @@ class IbisEtc(object):
             self.acc_whole_strips = {}
             self.acc_biases = {}
             self.sci_acc_strips = {}
+            self.all_sci_acc_strips = {}
             self.strip_skies  = dict((chip,[]) for chip in self.chipnames)
             self.strip_sig1s  = dict((chip,[]) for chip in self.chipnames)
             self.acc_strip_sig1s  = dict((chip,[]) for chip in self.chipnames)
@@ -457,11 +463,20 @@ class IbisEtc(object):
             self.cumul_sky = []
             self.cumul_transparency = []
             self.efftimes = []
+            self.dt_walls = []
 
         F = fitsio.FITS(roi_filename, 'r')
-        if self.debug:
+        if self.debug and False:
             self.roi_debug_plots(F)
-        chips,imgs,phdr,biasvals,biasimgs = assemble_full_frames(roi_filename, drop_bias_rows=20)
+        chips,imgs,phdr,biasvals,biasimgs = assemble_full_frames(roi_filename,
+                                                                 drop_bias_rows=20)
+        # Remove a V-shape pattern (MAGIC number)
+        for chip,img in zip(chips, imgs):
+            h,w = img.shape
+            xx = np.arange(w)
+            hbias = np.abs(xx - (w/2 - 0.5)) * guider_horiz_slope
+            img -= hbias[np.newaxis,:]
+
         if first_time:
             self.roi_exptime = float(phdr['GEXPTIME'])
         else:
@@ -474,9 +489,14 @@ class IbisEtc(object):
 
         if first_time:
             dt_wall = (self.roi_datetimes[-1] - self.first_roi_datetime).total_seconds()
+            dt_sci = self.sci_times[0]
         else:
             dt_wall = (self.roi_datetimes[-1] - self.roi_datetimes[-2]).total_seconds()
+            dt_sci = self.sci_times[-1] - self.sci_times[-2]
         print('Wall time from start of last ROI to start of this one:', dt_wall)
+        print('dt sci: %.3f, dt wall: %.3f' % (dt_sci, dt_wall))
+
+        self.dt_walls.append(dt_wall)
 
         # The bottom ~20-25 rows have a strong ramp, even after bias subtraction.
         # The top row can also go wonky!
@@ -490,31 +510,64 @@ class IbisEtc(object):
                 self.acc_whole_strips[chip] = img.copy()
                 self.acc_biases[chip+'_L'] = biasimgs[ichip*2].copy()
                 self.acc_biases[chip+'_R'] = biasimgs[ichip*2+1].copy()
-                dt_sci = self.sci_times[0]
-                #print('Science frame time difference (first):', dt_sci)
-                self.sci_acc_strips[chip] = dt_sci * subimg / self.roi_exptime
+                self.sci_acc_strips[chip] = dt_sci * subimg.copy() / dt_wall
+                self.all_sci_acc_strips[chip] = [self.sci_acc_strips[chip].copy()]
             else:
-                self.acc_strips[chip] += subimg
-                self.acc_whole_strips[chip] += img
-                self.acc_biases[chip+'_L'] += biasimgs[ichip*2]
-                self.acc_biases[chip+'_R'] += biasimgs[ichip*2+1]
-                dt_sci = self.sci_times[-1] - self.sci_times[-2]
-                #print('Science frame time difference:', dt_sci)#, '-> total', self.sci_times[-1])
-                self.sci_acc_strips[chip] += dt_sci * subimg / self.roi_exptime
+                # HACK extraneous .copy()
+                self.acc_strips[chip] += subimg.copy()
+                self.acc_whole_strips[chip] += img.copy()
+                self.acc_biases[chip+'_L'] += biasimgs[ichip*2].copy()
+                self.acc_biases[chip+'_R'] += biasimgs[ichip*2+1].copy()
+                self.sci_acc_strips[chip] += (dt_sci * subimg.copy() / dt_wall)
+                self.all_sci_acc_strips[chip].append(self.sci_acc_strips[chip].copy())
 
             self.acc_strip_sig1s[chip].append(blanton_sky(self.acc_strips[chip], step=3))
             self.acc_strip_skies[chip].append(np.median(self.acc_strips[chip]))
             self.sci_acc_strip_skies[chip].append(np.median(self.sci_acc_strips[chip]))
 
+            print(chip, 'subimage median:', np.median(subimg))
             #print(chip, 'acc  sky rate:', self.sci_acc_strip_skies[chip][-1] / self.sci_times[-1])
+            print(chip, 'sci acc sky: %.2f' % self.sci_acc_strip_skies[chip][-1])
+
             print(chip, 'inst sky rate: %.2f counts/sec/pixel' % (self.strip_skies[chip][-1] / dt_wall))
+
+        if self.debug:
+            plt.clf()
+            plt.subplots_adjust(hspace=0)
+            for ichip,(chip,img) in enumerate(zip(chips,imgs)):
+                subimg = img[25:-1, :]
+                plt.subplot(8,1,ichip+1)
+                m = np.median(subimg.ravel())
+                r = 10
+                lo,md,hi = np.percentile(subimg.ravel(), [10,50,90])
+                print(chip, 'subimg percentiles: %.2f %.2f %.2f' % (lo,md,hi))
+                plt.imshow(subimg, interpolation='nearest', origin='lower',
+                           vmin=m-r, vmax=m+r, aspect='auto')
+                plt.xticks([]); plt.yticks([])
+            for ichip,(chip,img) in enumerate(zip(chips,imgs)):
+                plt.subplot(8,1,ichip+5)
+                #m = np.median(self.sci_acc_strips[chip].ravel())
+                ss = self.sci_acc_strip_skies[chip]
+                if len(ss) > 1:
+                    m2 = ss[-2] + m
+                else:
+                    m2 = ss[-1] + m
+                lo,md,hi = np.percentile(self.sci_acc_strips[chip].ravel(), [10,50,90])
+                print(chip, 'sci percentiles: %.2f %.2f %.2f' % (lo, md, hi))
+                plt.imshow(self.sci_acc_strips[chip], interpolation='nearest', origin='lower',
+                           vmin=m2-r*10, vmax=m2+r*10, aspect='auto')
+                plt.xticks([]); plt.yticks([])
+            self.ps.savefig()
+
+        for chip in chips:
+            print(chip, 'cumulative sky rate: %.2f counts/sec/pixel' % (self.acc_strip_skies[chip][-1] / sum(self.dt_walls)))
 
         # sky = np.median(np.hstack([img[25:-1,:] for img in imgs]))
         # print('Median sky level:', sky)
         #print('Median sky per chip:',
         #      ', '.join(['%.2f' % self.strip_skies[chip][-1] for chip in chips]))
 
-        if self.debug:
+        if self.debug and False:
             plt.clf()
             plt.subplots_adjust(hspace=0)
             for i,(chip,img) in enumerate(zip(chips, imgs)):
@@ -542,14 +595,14 @@ class IbisEtc(object):
             plt.suptitle('bias- and median-subtracted images')
             self.ps.savefig()
 
-        # Remove a V-shape pattern (MAGIC number)
-        h,w = imgs[0].shape
-        xx = np.arange(w)
-        hbias = np.abs(xx - (w/2 - 0.5)) * guider_horiz_slope
-        for img in imgs:
-            img -= hbias[np.newaxis,:]
+        # # Remove a V-shape pattern (MAGIC number)
+        # h,w = imgs[0].shape
+        # xx = np.arange(w)
+        # hbias = np.abs(xx - (w/2 - 0.5)) * guider_horiz_slope
+        # for img in imgs:
+        #     img -= hbias[np.newaxis,:]
 
-        if self.debug:
+        if self.debug and False:
             plt.clf()
             plt.subplots_adjust(hspace=0)
             for i,(chip,img) in enumerate(zip(chips, imgs)):
@@ -732,6 +785,7 @@ class IbisEtc(object):
             if len(self.sci_times) > 1:
                 iskyrate = ((self.sci_acc_strip_skies[chip][-1] - self.sci_acc_strip_skies[chip][-2]) /
                             (self.sci_times[-1] - self.sci_times[-2]))
+                print('Count difference:', (self.sci_acc_strip_skies[chip][-1] - self.sci_acc_strip_skies[chip][-2]))
             else:
                 iskyrate = self.sci_acc_strip_skies[chip][-1] / self.sci_times[-1]
             iskybr = -2.5 * np.log10(iskyrate /pixsc/pixsc) + self.nom_zp
@@ -1211,12 +1265,134 @@ class DECamGuiderMeasurer(RawMeasurer):
 # 'zp_med_skysub': 19.14134165823857,
 # 'seeing': 1.5064726327517675
 
+def compute_shift_all(roi_settings):
+    print('roi_settings:', roi_settings)
+    setup = roi_settings
+
+    # Defaults from GCS.py
+    roi_size = [50,50]
+    #add rows below ROI to the readout, to be discarded by roi_masker 
+    rows_discard = 5
+    #active rows in the CCDs
+    nrows_pan = 2048
+
+    dely = roi_size[1]
+    delx = roi_size[0]
+    rows = nrows_pan
+    half_delx = delx/2
+    half_dely = dely/2
+
+    x1N = int(setup['roi']['GN1'][0]) - half_delx
+    x2N = int(setup['roi']['GN2'][0]) - half_delx
+    x1S = int(setup['roi']['GS1'][0]) - half_delx
+    x2S = int(setup['roi']['GS2'][0]) - half_delx
+
+    y1N = int(setup['roi']['GN1'][1]) - half_dely - rows_discard
+    y2N = int(setup['roi']['GN2'][1]) - half_dely - rows_discard
+    y1S = int(setup['roi']['GS1'][1]) - half_dely - rows_discard
+    y2S = int(setup['roi']['GS2'][1]) - half_dely - rows_discard
+
+    # max row and column ROI in each CCD
+    #mx1N = int(setup['roi']['GN1'][0]) + half_delx
+    #mx2N = int(setup['roi']['GN2'][0]) + half_delx
+    #mx1S = int(setup['roi']['GS1'][0]) + half_delx
+    #mx2S = int(setup['roi']['GS2'][0]) + half_delx
+    #my1N = int(setup['roi']['GN1'][1]) + half_dely
+    #my2N = int(setup['roi']['GN2'][1]) + half_dely
+    #my1S = int(setup['roi']['GS1'][1]) + half_dely
+    #my2S = int(setup['roi']['GS2'][1]) + half_dely          
+
+    if(x1N<1): x1N=1
+    if(x2N<1): x2N=1
+    if(x1S<1): x1S=1
+    if(x2S<1): x2S=1
+    if(y1N<2): y1N=2
+    if(y2N<2): y2N=2
+    if(y1S<2): y1S=2
+    if(y2S<2): y2S=2               
+
+    row = (y1N, y2N, y1S, y2S)
+    maxrow = max(row)
+    minrow = min(row)
+
+    xstart = 1               # starting column for the panview image calculation
+    ystart = maxrow          # starting row    for the panview image calculation
+
+    #the number of rows the MCB sequencer: skips shift_all; clears after readout after_Rows
+    shift_all = max(maxrow - 1,1)   # MCB sequencer loop register
+
+    dely = dely + rows_discard
+    after_Rows = rows - minrow - dely + 1
+
+    skip={}
+    skip['GN1']= maxrow - y1N
+    skip['GN2']= maxrow - y2N
+    skip['GS1']= maxrow - y1S
+    skip['GS2']= maxrow - y2S
+
+    return dict(shift_all=shift_all, after_rows=after_Rows, skip=skip)
+
+    '''
+As an example, I looked for the logs on the image number you mention, exposure number 1278659:
+
+2024-02-28T23:56:21 command: set exptime 600.000000
+2024-02-28T23:56:21 imediateReply: DONE
+2024-02-28T23:56:21 command: set seqdelay 200
+
+2024-02-28T23:59:22 command: set SHIFT_ALL 1884
+2024-02-28T23:59:22 imediateReply: DONE
+2024-02-28T23:59:22 command: set AFTER_ROWS 1277
+2024-02-28T23:59:22 imediateReply: DONE
+2024-02-28T23:59:22 command: memory write 4 none 0x1 loc 0x0490
+2024-02-28T23:59:22 imediateReply: DONE
+2024-02-28T23:59:22 command: memory write 2 none 0x3 loc 0x0000
+2024-02-28T23:59:22 imediateReply: DONE
+2024-02-28T23:59:22 command: memory write 4 none 0x3 loc 0x02f4
+2024-02-28T23:59:22 imediateReply: DONE
+2024-02-28T23:59:22 command: memory write 4 none 0x2 loc 0x015d
+'''
+
+    #'guide_ccds' : ['GN1','GN2','GS1','GS2'],
+    #"slot":{'GN1':4,  'GN2': 2, 'GS1': 4, 'GS2' : 4},                    # DHE slot for CB controlling the CCDs
+    #"skipReg":{'GN1':1,  'GN2': 3, 'GS1': 3, 'GS2' : 2},                 # CB registers for skip rows for the CCDs
+
+
 if __name__ == '__main__':
     import json
     import pickle
 
-    metadata = {}
+    if False:
+        from measure_raw import DECamMeasurer
+        from astrometry.util.plotutils import PlotSequence
+        ps = PlotSequence('meas')
+        # raw image for 1336362
+        imgfn = 'c4d_241029_012100_ori.fits.fz'
+        meas = DECamMeasurer(imgfn, 'N4', nominal_cal)
+        R = meas.run(ps=ps)
+        print(R.keys())
+        sys.exit(0)
 
+    # 1336362: sky levels
+    # ACQ:
+    # GS1: 0.302
+    # GS2: 0.264
+    # GN1: 0.271
+    # GN2: 0.253
+
+    # ROI: cumulative:
+    # GS1: 0.71
+    # GS2: 0.67
+    # GN1: 0.68
+    # GN2: 0.65
+
+    # RAW image:
+    # N4: 1.154, but gains = 4.025 4.077
+    # -> 0.284
+
+
+
+
+    metadata = {}
     from obsdb import django_setup
     django_setup(database_filename='decam.sqlite3')
     from obsdb.models import MeasuredCCD
@@ -1248,15 +1424,41 @@ if __name__ == '__main__':
     target_gexptime = 0.9
     for expnum in [1336362]:
     #for expnum in range(1336348, 1336450+1):
+    #for expnum in range(1336348, 1336436+1):
     # 2.0-second GEXPTIME
     #target_gexptime = 2.0
     #for expnum in range(1336976, 1337017+1):
         print('Expnum', expnum)
         # Maybe no Astrometry.net index files... (not XMM field)
-        if expnum in [1336376, 1336413, 1336437, 1336438, 1336439, 1336440, 1336441,
+        if expnum in [1336375, 1336397, 1336407, 
+                      1336376, 1336413, 1336437, 1336438, 1336439, 1336440, 1336441, 1336442,
                       1337014, 1337015, 1337016, 1337017]:
             print('Skip')
             continue
+
+        roi_settings = json.load(open('/Users/dstn/ibis-data-transfer/guider-acq/roi_settings_%08i.dat' % expnum))
+        S = compute_shift_all(roi_settings)
+        print(S)
+
+        # (SHIFT_ALL + AFTER_ROWS + 55) * PAR_SHIFT_TIME  + 438 (roi serial read time + sequence delay) + EXPTIME
+
+        shift_all = S['shift_all']
+        after_rows = S['after_rows']
+
+        par_shift_time = 160e-6
+        pixel_read_time = 4e-6
+        seq_delay_time = 200e-3
+        gexptime = target_gexptime
+
+        roi_read = 55 * (par_shift_time + 1080 * pixel_read_time)
+        print('ROI read time:    %8.3f ms' % (roi_read * 1e3))
+        print('Shift time:       %8.3f ms' % (shift_all * par_shift_time * 1e3))
+        print('After shift time: %8.3f ms' % (after_rows * par_shift_time * 1e3))
+        print('Seq delay time:   %8.3f ms' % (seq_delay_time * 1e3))
+        print('exposure time:    %8.3f ms' % (gexptime * 1e3))
+        
+        total_time = (shift_all + after_rows) * par_shift_time + roi_read + seq_delay_time + gexptime
+        print('Total time:       %8.3f ms' % (total_time * 1e3))
 
         kwa = metadata[expnum]
 
@@ -1302,18 +1504,31 @@ if __name__ == '__main__':
             roi_settings = json.load(open('/Users/dstn/ibis-data-transfer/guider-acq/roi_settings_%08i.dat' % expnum))
 
             for roi_num in range(1, 100):
+            #for roi_num in range(1, 10):
                 roi_filename = '~/ibis-data-transfer/guider-sequences/%i/DECam_guider_%i_%08i.fits.gz' % (expnum, expnum, roi_num)
-                #etc.set_plot_base('roi-%03i' % roi_num)
-                etc.set_plot_base(None)
+                roi_filename = os.path.expanduser(roi_filename)
+                if not os.path.exists(roi_filename):
+                    print('Does not exist:', roi_filename)
+                    break
+                etc.set_plot_base('roi-%03i' % roi_num)
+                #etc.set_plot_base(None)
                 etc.process_roi_image(roi_settings, roi_num, roi_filename)
+
+            etc.shift_all = shift_all
+            etc.after_rows = after_rows
 
             f = open(state2fn,'wb')
             pickle.dump(etc, f)
             f.close()
         else:
+            #continue
             etc = pickle.load(open(state2fn, 'rb'))
 
     #sys.exit(0)
+
+        if etc.acc_strips is None:
+            print('No ROI images')
+            continue
 
         from astrometry.util.plotutils import PlotSequence
         ps = PlotSequence(os.path.join(procdir, 'roi-summary-%i' % expnum))
@@ -1329,6 +1544,50 @@ if __name__ == '__main__':
             plt.ylabel(chip)
         plt.suptitle('Accumulated strips')
         ps.savefig()
+
+        plt.clf()
+        plt.subplots_adjust(hspace=0)
+        mx = np.percentile(np.hstack([x.ravel() for x in etc.acc_strips.values()]), 98)
+        for i,chip in enumerate(etc.chipnames):
+            plt.subplot(4,1,i+1)
+            plt.imshow(etc.sci_acc_strips[chip], interpolation='nearest', origin='lower',
+                       aspect='auto', vmin=0, vmax=mx)
+            plt.xticks([]); plt.yticks([])
+            plt.ylabel(chip)
+        plt.suptitle('Science-weighted accumulated strips')
+        ps.savefig()
+
+        plt.clf()
+        cmap = matplotlib.cm.jet
+        for i,chip in enumerate(etc.chipnames):
+            plt.subplot(2,2,i+1)
+            N = len(etc.all_sci_acc_strips[chip])
+            #pcts = np.arange(10, 100, 10)
+            lo,hi = 0,0
+            for j in range(N):
+                l,h = np.percentile(etc.all_sci_acc_strips[chip][j].ravel(), [5,95])
+                lo = min(lo, l)
+                hi = max(hi, h)
+            for j in range(N):
+                h,e = np.histogram(etc.all_sci_acc_strips[chip][j].ravel(), range=(lo,hi),
+                                   bins=25)
+                #plt.hist(etc.all_sci_acc_strips[chip][j].ravel(), range=(lo,hi), bins=25,
+                #         histtype='step', color=cmap(j/N))
+                plt.plot(e[:-1] + (e[1]-e[0])/2., h, '-', alpha=0.2, color=cmap(j/N))
+                plt.axvline(np.median(etc.all_sci_acc_strips[chip][j].ravel()),
+                            color=cmap(j/N), alpha=0.1)
+            plt.title(chip)
+        ps.savefig()
+
+        # plt.clf()
+        # for i,chip in enumerate(etc.chipnames):
+        #     pix = etc.acc_strips[chip].ravel()
+        #     n,b,p = plt.hist(pix)#, **ha)
+        #     c = p[0].get_edgecolor()
+        #     plt.hist(etc.acc_biases[chip+'_L'].ravel(), histtype='step', linestyle='--')
+        #     plt.hist(etc.acc_biases[chip+'_R'].ravel(), histtype='step', linestyle=':')
+        # plt.suptitle('Accumulated strips & biases')
+        # ps.savefig()
 
         plt.clf()
         plt.subplots_adjust(hspace=0)
