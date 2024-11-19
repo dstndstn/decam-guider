@@ -582,7 +582,7 @@ class IbisEtc(object):
                     return r
 
                 models = []
-                meds = []
+                #meds = []
                 for bias in [biasl, biasr]:
                     # Trim off top row -- it sometimes glitches!
                     bias = bias[:-1, :]
@@ -592,7 +592,7 @@ class IbisEtc(object):
                     plt.plot(np.median(bias, axis=1), '-')
 
                     med = np.median(bias, axis=1)
-                    meds.append(med)
+                    #meds.append(med)
                     N,_ = bias.shape
                     x = np.arange(N)
                     #print('Starting fit...')
@@ -606,7 +606,41 @@ class IbisEtc(object):
 
                     plt.subplot(2,1,2)
                     plt.plot(med - model, '-')
+                    plt.xlabel('Overscan row (pixels)')
+                    plt.ylabel('Row-wise median - model')
+            plt.suptitle('Bias image vs exponential decay')
+            self.ps.savefig()
 
+            def objective2(params, x, b):
+                offset, slope, eamp, escale = params
+                model = offset + slope * x + eamp * np.exp(-x / escale)
+                r = np.sum(np.abs(b - model[:,np.newaxis]))
+                return r
+
+            plt.clf()
+            for ichip,(chip,img) in enumerate(zip(chips,imgs)):
+                # First row doesn't seem to fit the exponential model
+                #img = img[1:-1, :]
+                # Last row sometimes glitches
+                img = img[:-1, :]
+                med = np.median(img, axis=1)
+                plt.subplot(2,1,1)
+                plt.plot(med, '-')
+                plt.yscale('log')
+                plt.ylim(0.01, 1e3)
+                N,_ = img.shape
+                x = np.arange(N)
+                r = scipy.optimize.minimize(objective2, (1., 0.01, med[0], 7.), args=(x, img),
+                                            method='Nelder-Mead')
+                offset, slope, eamp, escale = r.x
+                model = offset + slope * x + eamp * np.exp(-x / escale)
+                plt.plot(x, model, '--', color='k', alpha=0.3)
+                plt.subplot(2,1,2)
+                plt.plot(med - model, '-')
+                plt.ylim(-1, +1)
+                plt.xlabel('ROI image row (pixels)')
+                plt.ylabel('Row-wise median - model')
+            plt.suptitle('ROI image vs exponential decay + slope')
             self.ps.savefig()
 
         for chip in chips:
