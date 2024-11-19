@@ -469,8 +469,12 @@ class IbisEtc(object):
         F = fitsio.FITS(roi_filename, 'r')
         if self.debug and False:
             self.roi_debug_plots(F)
+        print('Reading', roi_filename)
+        kw = {}
+        if self.debug:
+            kw.update(ps=self.ps)
         chips,imgs,phdr,biasvals,biasimgs = assemble_full_frames(roi_filename,
-                                                                 drop_bias_rows=20)
+                                                                 drop_bias_rows=20, **kw)
         # Remove a V-shape pattern (MAGIC number)
         for chip,img in zip(chips, imgs):
             h,w = img.shape
@@ -574,12 +578,11 @@ class IbisEtc(object):
                 biasl = biasimgs[ichip*2  ] - bl
                 biasr = biasimgs[ichip*2+1] - br
 
+                # Fit an exponential drop-off plus a constant
                 def objective(params, x, b):
                     offset, eamp, escale = params
                     model = offset + eamp * np.exp(-x / escale)
-                    r = np.sum(np.abs(b - model[:,np.newaxis]))
-                    #print('offset %.3f amp %8.3f scale %.3f --> r %16.8f' % (offset, eamp, escale, r))
-                    return r
+                    return np.sum(np.abs(b - model[:,np.newaxis]))
 
                 models = []
                 #meds = []
@@ -944,7 +947,7 @@ def blanton_sky(img, dist=5, step=10):
     sig1 = 1.4826 * mad / np.sqrt(2.)
     return sig1
 
-def assemble_full_frames(fn, drop_bias_rows=48):
+def assemble_full_frames(fn, drop_bias_rows=48, ps=None):
     F = fitsio.FITS(fn, 'r')
     phdr = F[0].read_header()
     chipnames = []
@@ -953,52 +956,236 @@ def assemble_full_frames(fn, drop_bias_rows=48):
     biasimgs = []
     # 4 guide chips
     for i in range(4):
-        #DATASEC = '[7:1030,1:2048]'    / Data section to display
-        #DETPOS  = 'GS1     '
-        # two amps per chip
+        # two amps per chip (assumed in Left-Right order)
         ampimgs = []
         biasvals = []
         for j in range(2):
             hdu = i*2 + j + 1
             img = F[hdu].read()
-            #print('Full amp image shape:', img.shape)
             hdr = F[hdu].read_header()
+
+            # Grab the data section
             datasec = hdr['DATASEC'].strip('[]').split(',')
             assert(len(datasec) == 2)
-            #print(datasec)
-            #v = [w.split(':') for w in datasec]
             (x0,x1),(y0,y1) = [[int(x) for x in vi] for vi in [w.split(':') for w in datasec]]
-            #print(v)
-            #(x0,x1),(y0,y1) = [int(x) for x in [w.split(':') for w in datasec]]
+            # Trim off last row -- it sometimes glitches!
+            y1 -= 1
+            maxrow = y1
+            dataslice = slice(y0-1, y1), slice(x0-1, x1)
             ampimg = img[y0-1:y1, x0-1:x1]
-            #print('DATASEC shape:', ampimg.shape)
 
+            # Grab the overscan/"bias" section
             biassec = hdr['BIASSEC'].strip('[]').split(',')
             assert(len(biassec) == 2)
             (x0,x1),(y0,y1) = [[int(x) for x in vi] for vi in [w.split(':') for w in biassec]]
+            # Trim off last row -- it sometimes glitches!
+            y1 -= 1
+            maxrow = max(maxrow, y1)
+            biasslice = slice(y0-1, y1), slice(x0-1, x1)
             biasimg = img[y0-1:y1, x0-1:x1]
-            #print('BIASSEC shape:', biasimg.shape)
-            #print('BIAS median:', np.median(biasimg))
 
+            fitimg = img[:maxrow, :].astype(np.float32)
+            datamask = np.zeros(fitimg.shape, bool)
+            biasmask = np.zeros(fitimg.shape, bool)
+            datamask[dataslice] = True
+            biasmask[biasslice] = True
+
+            # Fit an exponential drop-off to the whole pixel stream
+            # (in the data or bias mask), plus constants for the bias and data sections.
+            def objective(params, img, datamask, biasmask):
+                data_offset, bias_offset, eamp, escale = params
+                h,w = img.shape
+                model = eamp * np.exp(-np.arange(h*w).reshape(h,w) / escale)
+                model += datamask * data_offset
+                model += biasmask * bias_offset
+                keep = datamask | biasmask
+                return np.sum(np.abs((img - model) * keep))
+
+            # Trim off last row -- it sometimes glitches!
+            #fitimg = img[:-1, :].astype(np.float32)
+            #fitimg = img.astype(np.float32)
+            rowmed = np.median(fitimg[biasslice], axis=1)
+            med = np.median(rowmed[len(rowmed)//2:])
+            r = scipy.optimize.minimize(objective, (med, med, rowmed[0]-med, 4000.),
+                                        args=(fitimg, datamask, biasmask),
+                                        method='Nelder-Mead')
+            assert(r.success)
+            print('full image fit results:', r)
+            data_offset, bias_offset, eamp, escale = r.x
+            h,w = fitimg.shape
+            model = eamp * np.exp(-np.arange(h*w).reshape(h,w) / escale)
+            model += datamask * data_offset
+            model += biasmask * bias_offset
+            bias_model = model[biasslice]
+            data_model = model[dataslice]
+
+            if ps is not None:
+                plt.clf()
+                plt.subplot(2,3,1)
+                mn,mx = np.percentile(fitimg[biasslice].ravel(), [1,99])
+                ima = dict(interpolation='nearest', origin='lower', vmin=mn, vmax=mx)
+                plt.imshow(fitimg[biasslice], **ima)
+                plt.title('Bias image')
+                plt.subplot(2,3,2)
+                plt.imshow(bias_model, **ima)
+                plt.title('Bias model')
+                plt.subplot(2,3,3)
+                dmx = np.percentile(np.abs(fitimg[biasslice] - bias_model), 99)
+                plt.imshow(fitimg[biasslice] - bias_model, interpolation='nearest', origin='lower',
+                           vmin=-dmx, vmax=+dmx)
+                plt.title('Bias resid')
+                plt.subplot(2,3,4)
+                ima.update(aspect='auto')
+                plt.imshow(fitimg[dataslice], **ima)
+                plt.title('Data image')
+                plt.subplot(2,3,5)
+                plt.imshow(data_model, **ima)
+                plt.title('Data model')
+                plt.subplot(2,3,6)
+                dmx = np.percentile(np.abs(fitimg[dataslice] - data_model), 99)
+                plt.imshow(fitimg[dataslice] - data_model, interpolation='nearest',
+                           origin='lower', aspect='auto', vmin=-dmx, vmax=+dmx)
+                plt.title('Data resid')
+                ps.savefig()
+
+                plt.clf()
+                plt.subplot(2,2,1)
+                off = 5 - bias_offset
+                plt.plot(off + np.median(fitimg[biasslice], axis=1), '-')
+                plt.plot(off + np.median(bias_model, axis=1), '-')
+                plt.yscale('log')
+                plt.title('Bias')
+                plt.subplot(2,2,2)
+                plt.plot(np.median(fitimg[biasslice] - bias_model, axis=1), '-')
+                plt.title('Bias resid')
+                plt.subplot(2,2,3)
+                off = 5 - data_offset
+                plt.plot(off + np.median(fitimg[dataslice], axis=1), '-')
+                plt.plot(off + np.median(data_model, axis=1), '-')
+                plt.yscale('log')
+                plt.title('Data')
+                plt.subplot(2,2,4)
+                plt.plot(np.median(fitimg[dataslice] - data_model, axis=1), '-')
+                plt.title('Data resid')
+                ps.savefig()
+
+            # Fit an exponential drop-off plus a constant to the bias region
+            def objective(params, x, b):
+                offset, eamp, escale = params
+                model = offset + eamp * np.exp(-x / escale)
+                return np.sum(np.abs(b - model[:,np.newaxis]))
+
+            # Trim off top row -- it sometimes glitches!
+            fitbias = biasimg[:-1, :].astype(np.float32)
+            med = np.median(fitbias, axis=1)
+            N,_ = fitbias.shape
+            medmed = np.median(med[N//2:])
+            x = np.arange(N)
+            r = scipy.optimize.minimize(objective, (medmed, med[0]-medmed, 7.), args=(x, fitbias),
+                                        method='Nelder-Mead')
+            #print('Bias fit result:', r)
+            assert(r.success)
+            bias_offset, bias_eamp, bias_escale = r.x
+            if ps is not None:
+                bias_model = bias_offset + bias_eamp * np.exp(-x / bias_escale)
+                fitbias_resid = fitbias - bias_model[:, np.newaxis]
+            # Apply to the original bias image
+            N,_ = biasimg.shape
+            x = np.arange(N)
+            # Don't subtract off the "offset" term!
+            bias_model = bias_eamp * np.exp(-x / bias_escale)
+            biasimg = biasimg.astype(np.float32) - bias_model[:, np.newaxis]
             biasimgs.append(biasimg)
-            # First ~50 rows are bad (very bright)
+
+            # Drop rows at the beginning
             biasimg = biasimg[drop_bias_rows:, :]
+            # Drop the last row (sometimes glitchy)
+            biasimg = biasimg[:-1, :]
 
             # Sort the resulting 2000 x 50 array so that the 50 columns are sorted for each row
             s = np.sort(biasimg, axis=1)
             # Take the mean of the middle 10 pixels, for each row
             m = np.mean(s[:, 20:30], axis=1)
             m = np.median(m)
-            ampimg = ampimg.astype(np.float32)
+            print('Bias: fit offset: %.3f.  median: %.3f.' % (bias_offset, m))
+
+            # Fit an exponential decay + slope + offset to the image
+            def objective2(params, x, b):
+                offset, slope, eamp, escale = params
+                model = offset + slope * x + eamp * np.exp(-x / escale)
+                return np.sum(np.abs(b - model[:,np.newaxis]))
+
+            # Last row sometimes glitches
+            fitimg = ampimg[:-1, :]
+            med = np.median(fitimg, axis=1)
+            N,_ = fitimg.shape
+            medmed = np.median(med[N//2:])
+            x = np.arange(N)
+            r = scipy.optimize.minimize(objective2, (medmed, 0.01, med[0]-medmed, 7.),
+                                        args=(x, fitimg), method='Nelder-Mead')
+            #print('Image fit result:', r)
+            assert(r.success)
+            offset, slope, eamp, escale = r.x
+            if ps is not None:
+                model = offset + slope*x + eamp * np.exp(-x / escale)
+                fitimg_resid = fitimg - model[:, np.newaxis]
+            # Apply to the full image
+            N,_ = ampimg.shape
+            x = np.arange(N)
+            #model = offset + slope * x + eamp * np.exp(-x / escale)
+            # Don't subtract off the offset or slope!
+            model = eamp * np.exp(-x / escale)
+            ampimg = ampimg.astype(np.float32) - model[:, np.newaxis]
+
+            print('Image: fit slope %.8f, vs V slope %.8f' % (slope, guider_horiz_slope))
+
+            if ps is not None:
+                plt.clf()
+                plt.plot(fitimg[:10,:].ravel(), '-')
+                plt.title('Raveled image pixels')
+                ps.savefig()
+
+                plt.clf()
+                plt.plot(img[:10,:].ravel(), '-')
+                plt.title('All raveled image pixels')
+                ps.savefig()
+
+                plt.clf()
+                plt.subplot(2,4,1)
+                plt.imshow(fitbias, interpolation='nearest', origin='lower')
+                plt.title('Bias image')
+                plt.subplot(2,4,2)
+                plt.imshow(fitbias_resid, interpolation='nearest', origin='lower')
+                plt.title('Bias resid')
+                plt.subplot(2,4,3)
+                plt.title('Bias model')
+                z = -bias_offset + 5
+                plt.plot(np.median(fitbias, axis=1) + z, '-')
+                plt.plot(bias_model + bias_offset + z, '-')
+                plt.yscale('log')
+                plt.subplot(2,4,4)
+                plt.title('Bias resid')
+                plt.plot(np.median(fitbias_resid, axis=1), '-')
+                plt.subplot(2,4,5)
+                plt.imshow(fitimg, interpolation='nearest', origin='lower', aspect='auto')
+                plt.title('Image')
+                plt.subplot(2,4,6)
+                plt.imshow(fitimg_resid, interpolation='nearest', origin='lower', aspect='auto')
+                plt.title('Image resid')
+                plt.subplot(2,4,7)
+                z = -offset + 5
+                plt.plot(np.median(fitimg, axis=1) + z, '-')
+                plt.plot(model + offset + x*slope + z, '-')
+                plt.title('Image & model')
+                plt.yscale('log')
+                plt.subplot(2,4,8)
+                plt.plot(np.median(fitimg_resid, axis=1), '-')
+                plt.title('Image resid')
+                ps.savefig()
+            
             ampimg -= m
+
             biasvals.append(m)
-            #plt.imshow(biasimg)
-            #m = np.median(biasimg)
-            #plt.plot(np.median(biasimg, axis=1),'-')
-            #plt.plot(m, '-')
-            #plt.ylim(m-20, m+20)
-            #plt.axvline(50)
-            #plt.show()
             ampimgs.append(ampimg)
         biases.append(biasvals)            
         chipnames.append(hdr['DETPOS'])
