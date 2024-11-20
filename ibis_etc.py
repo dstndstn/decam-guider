@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import pylab as plt
 import matplotlib
+import time
 
 import pyfftw
 
@@ -1006,34 +1007,61 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None):
                 datamask[dataslice] = True
                 biasmask[biasslice] = True
 
-                def exp_model(eamp, escale, imgshape, rev):
-                    h,w = imgshape
-                    pixelnum = np.arange(h*w).reshape(h,w)
-                    if rev:
-                        pixelnum = pixelnum[:, ::-1]
-                    model = eamp * np.exp(-pixelnum / escale)
-                    return model
+                # def exp_model(eamp, escale, imgshape, rev):
+                #     h,w = imgshape
+                #     pixelnum = np.arange(h*w).reshape(h,w)
+                #     if rev:
+                #         pixelnum = pixelnum[:, ::-1]
+                #     model = eamp * np.exp(-pixelnum / escale)
+                #     return model
 
                 # Fit an exponential drop-off to the whole pixel stream
                 # (in the data or bias mask), plus constants for the bias and data sections.
-                def objective(params, img, datamask, biasmask, rev):
+                # def objective(params, img, datamask, biasmask, rev):
+                #     data_offset, bias_offset, eamp, escale = params
+                #     model = exp_model(eamp, escale, img.shape, rev)
+                #     model += datamask * data_offset
+                #     model += biasmask * bias_offset
+                #     keep = datamask | biasmask
+                #     return np.sum(np.abs((img - model) * keep))
+                def objective(params, img, datamask, biasmask, rev, pixelnum, dataslice, biasslice):
                     data_offset, bias_offset, eamp, escale = params
-                    model = exp_model(eamp, escale, img.shape, rev)
-                    model += datamask * data_offset
-                    model += biasmask * bias_offset
-                    keep = datamask | biasmask
-                    return np.sum(np.abs((img - model) * keep))
-    
+                    model = eamp * np.exp(-pixelnum / escale)
+                    return (np.sum(np.abs(model[dataslice] + data_offset - img[dataslice])) +
+                            np.sum(np.abs(model[biasslice] + bias_offset - img[biasslice])))
+
+                rev = (j == 1)
+                # Remove the V-shaped pattern before fitting
+                h,w = fitimg.shape
+                xx = np.arange(w)
+                if not rev:
+                    xx = xx[::-1]
+                v_model = xx * guider_horiz_slope
+
+                fitimg -= v_model
+
+                h,w = fitimg.shape
+                pixelnum = np.arange(h*w).reshape(h,w)
+                if rev:
+                    pixelnum = pixelnum[:, ::-1]
+
                 rowmed = np.median(fitimg[biasslice], axis=1)
                 med = np.median(rowmed[len(rowmed)//2:])
-                rev = (j == 1)
-                r = scipy.optimize.minimize(objective, (med, med, rowmed[0]-med, 4000.),
-                                            args=(fitimg, datamask, biasmask, rev),
+                t0 = time.time()
+                r = scipy.optimize.minimize(objective, (med, med, rowmed[0]-med, 4800.),
+                                            args=(fitimg, datamask, biasmask, rev,
+                                                  pixelnum, dataslice, biasslice),
                                             method='Nelder-Mead')
+                t1 = time.time()
+                print('Fitting took %.3f sec' % (t1-t0))
                 assert(r.success)
                 #print('full image fit results:', r)
                 data_offset, bias_offset, eamp, escale = r.x
-                model = exp_model(eamp, escale, fitimg.shape, rev)
+                #print('Guess     %.1f,     %.1f,         %.1f %.1f' % (4800, rowmed[0]-med, med, med))
+                #print('Exp scale %.1f, amp %.1f, offsets %.1f %.1f' % (escale, eamp, data_offset, bias_offset))
+                model = eamp * np.exp(-pixelnum / escale)
+                #model = exp_model(eamp, escale, fitimg.shape, rev)
+                model += v_model[np.newaxis, :]
                 #model += datamask * data_offset
                 #model += biasmask * bias_offset
                 bias_model = model[biasslice]
@@ -1835,10 +1863,12 @@ if __name__ == '__main__':
         ps.savefig()
 
         plt.clf()
+        mn = 1e6
         for i,chip in enumerate(etc.chipnames):
-            plt.plot(np.median(etc.acc_strips[chip], axis=0), '-')
-        #yl,yh = plt.ylim()
-        #plt.ylim(yl, yl+20)
+            m = np.median(etc.acc_strips[chip], axis=0)
+            mn = min(mn, min(m))
+            plt.plot(m, '-')
+        plt.ylim(mn, mn+100)
         plt.title('Accumulated strips')
         ps.savefig()
 
