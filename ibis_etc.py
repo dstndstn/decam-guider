@@ -1032,23 +1032,14 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None):
                 # is in the opposite direction
                 rev = (j == 1)
 
-                # Remove the V-shaped pattern before fitting
+                # Model the V-shaped pattern
                 h,w = fitimg.shape
                 xx = np.arange(w)
                 if not rev:
                     xx = xx[::-1]
                 v_model = xx * guider_horiz_slope
-                #fitimg -= v_model
 
-                # We used to enumerate the pixel number / order of pixel readout, but that array isn't
-                # actually required
-                # pixelnum = np.arange(h*w).reshape(h,w)
-                # if rev:
-                #     pixelnum = pixelnum[:, ::-1]
-                # dpix = pixelnum[dataslice]
-                # bpix = pixelnum[biasslice]
                 ystride = w
-
                 if rev:
                     data_pixel0 = data_y0 * w + (w-1 - data_x0)
                     bias_pixel0 = bias_y0 * w + (w-1 - bias_x0)
@@ -1057,17 +1048,6 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None):
                     data_pixel0 = data_y0 * w + data_x0
                     bias_pixel0 = bias_y0 * w + bias_x0
                     xstride = +1
-
-                # print('dpix:', dpix[:3, :3])
-                # print('data x0,y0:', data_x0, data_y0)
-                # print('data x1:', data_x1)
-                # assert(dpix[0,0] == data_pixel0)
-                # assert(bpix[0,0] == bias_pixel0)
-                # xdir = -1 if rev else +1
-                # dh,dw = dpix.shape
-                # assert(np.all(dpix[0,0] + pstride * np.arange(dh)[:,np.newaxis] + xdir * np.arange(dw)[np.newaxis,:] == dpix))
-                # bh,bw = bpix.shape
-                # assert(np.all(bpix[0,0] + pstride * np.arange(bh)[:,np.newaxis] + xdir * np.arange(bw)[np.newaxis,:] == bpix))
 
                 rowmed = np.median(fitimg[biasslice], axis=1)
                 med = np.median(rowmed[len(rowmed)//2:])
