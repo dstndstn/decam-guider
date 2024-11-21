@@ -33,7 +33,7 @@ from astrometry.util.starutil_numpy import hmsstring2ra, dmsstring2dec
 sfd = SFDMap()
 
 # Remove a V-shape pattern (MAGIC number)
-guider_horiz_slope = 0.00188866
+guider_horiz_slope = 0.00168831
 
 TRACTOR_PARAM_PSFSIGMA = 0
 TRACTOR_PARAM_SKY = 1
@@ -125,7 +125,7 @@ class IbisEtc(object):
         '''
         self.clear_after_exposure()
         print('Reading', acqfn)
-        chipnames,imgs,phdr,biases,_ = assemble_full_frames(acqfn, fit_exp=False)
+        chipnames,imgs,phdr,biases,_,_ = assemble_full_frames(acqfn, fit_exp=False)
         # ASSUME that science image starts at the same time as the guider acq image
         self.acq_datetime = datetime_from_header(phdr)
         self.sci_datetime = self.acq_datetime
@@ -444,6 +444,7 @@ class IbisEtc(object):
             self.sci_acc_strips = {}
             self.all_sci_acc_strips = {}
             self.all_acc_biases = {}
+            self.strip_skies_2  = dict((chip,[]) for chip in self.chipnames)
             self.strip_skies  = dict((chip,[]) for chip in self.chipnames)
             self.strip_sig1s  = dict((chip,[]) for chip in self.chipnames)
             self.acc_strip_sig1s  = dict((chip,[]) for chip in self.chipnames)
@@ -474,14 +475,7 @@ class IbisEtc(object):
         kw = {}
         if self.debug and first_time:
             kw.update(ps=self.ps)
-        chips,imgs,phdr,biasvals,biasimgs = assemble_full_frames(roi_filename, **kw)
-        #drop_bias_rows=20, 
-        # # Remove a V-shape pattern (MAGIC number)
-        # for chip,img in zip(chips, imgs):
-        #     h,w = img.shape
-        #     xx = np.arange(w)
-        #     hbias = np.abs(xx - (w/2 - 0.5)) * guider_horiz_slope
-        #     img -= hbias[np.newaxis,:]
+        chips,imgs,phdr,biasvals,biasimgs,data_offs = assemble_full_frames(roi_filename, **kw)
 
         if first_time:
             self.roi_exptime = float(phdr['GEXPTIME'])
@@ -505,10 +499,13 @@ class IbisEtc(object):
         self.dt_walls.append(dt_wall)
 
         # The bottom ~20-25 rows have a strong ramp, even after bias subtraction.
+
         # The top row can also go wonky!
         # Estimate the sky level in the remaining pixels
-        for ichip,(chip,img,biases) in enumerate(zip(chips,imgs,biasvals)):
+        for ichip,(chip,img,biases,data_off) in enumerate(zip(chips,imgs,biasvals,data_offs)):
             subimg = img[25:-1, :]
+            print(chip, 'Data offsets:', data_off)
+            self.strip_skies_2[chip].append(np.mean(data_off))
             self.strip_skies[chip].append(np.median(subimg))
             self.strip_sig1s[chip].append(blanton_sky(subimg, step=3))
             bl,br = biases
@@ -552,7 +549,8 @@ class IbisEtc(object):
                 r = 10
                 lo,md,hi = np.percentile(subimg.ravel(), [10,50,90])
                 print(chip, 'subimg percentiles: %.2f %.2f %.2f' % (lo,md,hi))
-                plt.imshow(subimg, interpolation='nearest', origin='lower',
+                #plt.imshow(subimg, interpolation='nearest', origin='lower',
+                plt.imshow(img, interpolation='nearest', origin='lower',
                            vmin=m-r, vmax=m+r, aspect='auto')
                 plt.xticks([]); plt.yticks([])
                 plt.ylabel(chip)
@@ -573,12 +571,12 @@ class IbisEtc(object):
                     m2 = ss[-2] + m
                 else:
                     m2 = ss[-1] + m
-                plt.imshow(self.acc_strips[chip], interpolation='nearest', origin='lower',
+                #plt.imshow(self.acc_strips[chip], interpolation='nearest', origin='lower',
+                plt.imshow(self.acc_whole_strips[chip], interpolation='nearest', origin='lower',
                             vmin=m2-r*10, vmax=m2+r*10, aspect='auto')
                 plt.xticks([]); plt.yticks([])
                 plt.ylabel(chip)
-            #plt.suptitle('ROI images and Science-weighted accumulated')
-                plt.suptitle('ROI images and Accumulated')
+            plt.suptitle('ROI images and Accumulated')
             self.ps.savefig()
 
             # plt.clf()
@@ -963,11 +961,13 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None):
     imgs = []
     biases = []
     biasimgs = []
+    data_offsets = []
     # 4 guide chips
     for i in range(4):
         # two amps per chip (assumed in Left-Right order)
         ampimgs = []
         biasvals = []
+        data_offs = []
         for j in range(2):
             hdu = i*2 + j + 1
             img = F[hdu].read()
@@ -1003,6 +1003,7 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None):
             fitimg = img[:maxrow, :].astype(np.float32)
 
             bias_level = 0
+            data_level = 0
 
             if fit_exp:
 
@@ -1026,6 +1027,8 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None):
                     model = exp_model(eamp, escale, bias_pixel0, bias_img.shape,
                                       ystride, xstride)
                     r += np.sum(np.abs(model + bias_offset - bias_img))
+                    #print('obj %.3f, %.3f %.3f, %.3f -> %.3f' %
+                    # (data_offset, bias_offset, eamp, escale, r))
                     return r
 
                 # Flip the image left-right if it's the right-hand amp, because the readout
@@ -1049,10 +1052,9 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None):
                     bias_pixel0 = bias_y0 * w + bias_x0
                     xstride = +1
 
+                #t0 = time.time()
                 rowmed = np.median(fitimg[biasslice], axis=1)
                 med = np.median(rowmed[len(rowmed)//2:])
-                #t0 = time.time()
-                #x0 = (med, med, rowmed[0]-med, 4800.)
                 # Shift the levels of the images so that the offset parameters have values
                 # around 1.0 - to make life easier for the optimizer.
                 shift = (med - 1)
@@ -1066,7 +1068,11 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None):
                                             method='Nelder-Mead')
                 #t1 = time.time()
                 #print('Fitting took %.3f sec' % (t1-t0))
-                assert(r.success)
+                if not r.success:
+                    print('Warning: Fitting result:', r)
+                #     from astrometry.util.plotutils import PlotSequence
+                #     ps = PlotSequence('fit-fail')
+                #assert(r.success)
                 #print('Fitted parameters:', r.x)
                 data_offset, bias_offset, eamp, escale = r.x
                 data_offset += shift
@@ -1079,6 +1085,7 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None):
                                        biasimg.shape, ystride, xstride)
                 # HACK?  not adding V model to bias... it's small
                 bias_level = bias_offset
+                data_level = data_offset - bias_offset
 
                 # Subtract the exponential decay part of the model from the returned images
                 ampimg = ampimg - data_model
@@ -1144,6 +1151,8 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None):
                     plt.title('Data resid')
                     ps.savefig()
 
+                #assert(r.success)
+
             else:
                 # Not subtracting exponential model.
                 # Drop rows at the beginning
@@ -1160,12 +1169,14 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None):
 
             biasimgs.append(biasimg)
             biasvals.append(bias_level)
+            data_offs.append(data_level)
             ampimgs.append(ampimg)
         biases.append(biasvals)            
+        data_offsets.append(data_offs)
         chipnames.append(hdr['DETPOS'])
         imgs.append(np.hstack(ampimgs))
 
-    return chipnames, imgs, phdr, biases, biasimgs
+    return chipnames, imgs, phdr, biases, biasimgs, data_offsets
 
 class DECamGuiderMeasurer(RawMeasurer):
 
@@ -1719,7 +1730,7 @@ if __name__ == '__main__':
 
             roi_settings = json.load(open('/Users/dstn/ibis-data-transfer/guider-acq/roi_settings_%08i.dat' % expnum))
 
-            for roi_num in range(1, 100):
+            for roi_num in range(1, 300):
             #for roi_num in range(1, 10):
                 roi_filename = '~/ibis-data-transfer/guider-sequences/%i/DECam_guider_%i_%08i.fits.gz' % (expnum, expnum, roi_num)
                 roi_filename = os.path.expanduser(roi_filename)
@@ -1761,14 +1772,47 @@ if __name__ == '__main__':
         plt.suptitle('Accumulated strips')
         ps.savefig()
 
+        def get_v_model(slope, w):
+            xx = np.arange(w)
+            v_model = np.abs(xx - (w/2 - 0.5)) * slope
+            return v_model
+
+        def objective(params, strip):
+            offset, slope = params
+            w = len(strip)
+            v_model = get_v_model(slope, w)
+            return np.sum(np.abs(strip - (offset + v_model)))
+
         plt.clf()
         mn = 1e6
+        slopes = []
         for i,chip in enumerate(etc.chipnames):
+            
             m = np.median(etc.acc_strips[chip], axis=0)
             mn = min(mn, min(m))
-            plt.plot(m, '-')
+            plt.plot(m, '-', alpha=0.2)
+
+            r = scipy.optimize.minimize(objective, [0.,0.], args=(m,),
+                                        method='Nelder-Mead')
+            offset,slope = r.x
+            v_model = get_v_model(slope, len(m))
+            print('Slope', slope)
+            plt.plot(v_model + offset, '--')
+            slopes.append(slope)
+        print('Avg slope:', np.mean(slopes) / len(etc.acc_strip_skies[chip]))
+            
         plt.ylim(mn, mn+100)
         plt.title('Accumulated strips')
+        ps.savefig()
+
+        plt.clf()
+        for chip in etc.chipnames:
+            plt.subplot(2,1,1)
+            plt.plot(etc.strip_skies[chip], '.-', label=chip)
+            plt.subplot(2,1,2)
+            plt.plot(etc.strip_skies_2[chip], '.-', label=chip)
+        plt.ylabel('Strip skies')
+        plt.legend()
         ps.savefig()
 
         plt.clf()
@@ -1944,6 +1988,33 @@ if __name__ == '__main__':
         plt.xlabel('Science exposure time (sec)')
         plt.ylabel('Sky brightness (instantaneous) (mag/arcsec^2)')
         ps.savefig()
+
+        plt.clf()
+        avgsky = 0.
+        for chip in etc.chipnames:
+            isky = np.array(etc.strip_skies_2[chip]) / np.array(etc.dt_walls)
+            avgsky += isky
+            plt.plot(etc.sci_times, isky, '.-', alpha=0.5, label=chip)
+        plt.plot(etc.sci_times, avgsky/len(etc.chipnames), 'k-', label='Average')
+        plt.legend()
+        plt.xlabel('Science exposure time (sec)')
+        plt.ylabel('Sky brightness (instantaneous) (counts/pixel/sec)')
+        plt.title('sky from fitting')
+        ps.savefig()
+
+        plt.clf()
+        for chip in etc.chipnames:
+            isky = np.array(etc.strip_skies_2[chip]) / np.array(etc.dt_walls)
+            pixsc = nominal_cal.pixscale
+            skybr = -2.5 * np.log10(isky /pixsc/pixsc) + etc.nom_zp
+            plt.plot(etc.sci_times, skybr, '.-', label=chip)
+        #plt.plot(etc.sci_times, etc.cumul_sky, 'k.-', label='Cumulative')
+        plt.legend()
+        plt.xlabel('Science exposure time (sec)')
+        plt.ylabel('Sky brightness (instantaneous) (mag/arcsec^2)')
+        plt.title('sky from fitting')
+        ps.savefig()
+
 
         # plt.clf()
         # plt.xlabel('Science exposure time (sec)')
