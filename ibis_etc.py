@@ -898,7 +898,8 @@ def blanton_sky(img, dist=5, step=10):
     sig1 = 1.4826 * mad / np.sqrt(2.)
     return sig1
 
-def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None):
+def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None,
+                         subtract_bias=True):
     F = fitsio.FITS(fn, 'r')
     phdr = F[0].read_header()
     chipnames = []
@@ -1143,7 +1144,8 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None):
                 # For a scalar level, take the median
                 m = np.median(m)
                 bias_level = m
-                ampimg = ampimg - bias_level
+                if subtract_bias:
+                    ampimg = ampimg - bias_level
 
             biasimgs.append(biasimg)
             biasvals.append(bias_level)
@@ -1724,6 +1726,65 @@ if __name__ == '__main__':
             plt.ylabel(chip)
         plt.suptitle('Accumulated strips - row-wise bias')
         ps.savefig()
+
+        flatfn = os.path.join('guideflats', 'flat-%s.fits' % etc.filt.lower())
+        chipnames,flats,_,_,_,_ = assemble_full_frames(flatfn,
+                                                       subtract_bias=False, fit_exp=False)
+        assert(chipnames == etc.chipnames)
+
+        plt.clf()
+        plt.subplots_adjust(hspace=0)
+        for i,chip in enumerate(etc.chipnames):
+            plt.subplot(4,1,i+1)
+            x,y = etc.rois[chip]
+            ix = int(x)
+            iy = int(y)
+            ylo = max(0, iy-25)
+            plt.imshow(flats[i][ylo:ylo+51, :],
+                       interpolation='nearest', origin='lower',
+                       aspect='auto', vmin=0.8, vmax=1.2)
+            plt.xticks([]); plt.yticks([])
+            plt.ylabel(chip)
+        plt.suptitle('Flats - ROI strips')
+        ps.savefig()
+
+        plt.clf()
+        plt.subplots_adjust(hspace=0)
+        for i,chip in enumerate(etc.chipnames):
+            plt.subplot(4,1,i+1)
+            S = 150
+            x,y = etc.rois[chip]
+            ix = int(x)
+            iy = int(y)
+            xlo = max(0, ix-S)
+            plt.imshow(etc.acc_strips[chip][:, xlo:xlo+2*S],
+                       interpolation='nearest', origin='lower',
+                       #aspect='auto',
+                       vmin=0, vmax=mx)
+            plt.xticks([]); plt.yticks([])
+            plt.ylabel(chip)
+        plt.suptitle('Accumulated strips - around ROIs')
+        ps.savefig()
+
+        plt.clf()
+        plt.subplots_adjust(hspace=0)
+        for i,chip in enumerate(etc.chipnames):
+            plt.subplot(4,1,i+1)
+            S = 150
+            x,y = etc.rois[chip]
+            ix = int(x)
+            iy = int(y)
+            xlo = max(0, ix-S)
+            ylo = max(0, iy-25)
+            plt.imshow(flats[i][ylo:ylo+51, xlo:xlo+2*S],
+                       interpolation='nearest', origin='lower',
+                       #aspect='auto',
+                       vmin=0.8, vmax=1.2)
+            plt.xticks([]); plt.yticks([])
+            plt.ylabel(chip)
+        plt.suptitle('Flats - around ROIs')
+        ps.savefig()
+
 
         # # Re-fit the V model...
         # def get_v_model(slope, w):
