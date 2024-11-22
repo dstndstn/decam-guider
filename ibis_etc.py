@@ -450,6 +450,10 @@ class IbisEtc(object):
             self.strip_sig1s  = dict((chip,[]) for chip in self.chipnames)
             self.acc_strip_sig1s  = dict((chip,[]) for chip in self.chipnames)
             self.acc_strip_skies  = dict((chip,[]) for chip in self.chipnames)
+
+            self.acc_bias_medians = {}
+            self.acc_rowwise_skies = {}
+
             self.roi_apfluxes = dict((chip,[]) for chip in self.chipnames)
             self.roi_apskies  = dict((chip,[]) for chip in self.chipnames)
             self.tractors = {}
@@ -518,6 +522,13 @@ class IbisEtc(object):
                 # self.all_sci_acc_strips[chip] = [self.sci_acc_strips[chip].copy()]
                 # self.all_acc_biases[chip+'_L'] = [self.acc_biases[chip+'_L'].copy()]
                 # self.all_acc_biases[chip+'_R'] = [self.acc_biases[chip+'_R'].copy()]
+                self.acc_bias_medians[chip+'_L'] = []
+                self.acc_bias_medians[chip+'_R'] = []
+                self.acc_strip_skies[chip+'_L'] = []
+                self.acc_strip_skies[chip+'_R'] = []
+                self.acc_rowwise_skies[chip+'_L'] = []
+                self.acc_rowwise_skies[chip+'_R'] = []
+
             else:
                 # HACK extraneous .copy(), don't think we need them
                 self.acc_strips[chip] += img.copy()
@@ -528,10 +539,30 @@ class IbisEtc(object):
                 # self.all_acc_biases[chip+'_L'].append(self.acc_biases[chip+'_L'].copy())
                 # self.all_acc_biases[chip+'_R'].append(self.acc_biases[chip+'_R'].copy())
 
-            self.acc_strip_sig1s[chip].append(blanton_sky(self.acc_strips[chip], step=3))
-            self.acc_strip_skies[chip].append(np.median(self.acc_strips[chip]))
-            #self.sci_acc_strip_skies[chip].append(np.median(self.sci_acc_strips[chip]))
+            acc = self.acc_strips[chip]
+            self.acc_strip_sig1s[chip].append(blanton_sky(acc, step=3))
+            self.acc_strip_skies[chip].append(np.median(acc))
 
+            # Left and right half ROI medians
+            h,w = acc.shape
+            acc_l = acc[:, :w//2]
+            acc_r = acc[:, w//2:]
+            self.acc_strip_skies[chip+'_L'].append(np.median(acc_l))
+            self.acc_strip_skies[chip+'_R'].append(np.median(acc_r))
+
+            acc_bl = self.acc_biases[chip+'_L']
+            acc_br = self.acc_biases[chip+'_R']
+            self.acc_bias_medians[chip+'_L'].append(np.median(acc_bl))
+            self.acc_bias_medians[chip+'_R'].append(np.median(acc_br))
+
+            bias_l_rowmed = np.median(acc_bl, axis=1)
+            bias_r_rowmed = np.median(acc_br, axis=1)
+            #print('acc_l data:', acc_l.shape, 'acc_bl:', acc_bl.shape, 'bias-l-rowmed:', bias_l_rowmed.shape)
+
+            self.acc_rowwise_skies[chip+'_L'].append(np.median(acc_l - bias_l_rowmed[:,np.newaxis]))
+            self.acc_rowwise_skies[chip+'_R'].append(np.median(acc_r - bias_r_rowmed[:,np.newaxis]))
+            
+            #self.sci_acc_strip_skies[chip].append(np.median(self.sci_acc_strips[chip]))
             #print(chip, 'subimage median:', np.median(subimg))
             #print(chip, 'acc  sky rate:', self.sci_acc_strip_skies[chip][-1] / self.sci_times[-1])
             #print(chip, 'sci acc sky: %.2f' % self.sci_acc_strip_skies[chip][-1])
@@ -559,7 +590,8 @@ class IbisEtc(object):
             self.ps.savefig()
 
         for chip in chips:
-            print(chip, 'cumulative sky rate: %.2f counts/sec/pixel' % (self.acc_strip_skies[chip][-1] / sum(self.dt_walls)))
+            print(chip, 'cumulative sky rate: %.2f counts/sec/pixel' %
+                  (self.acc_strip_skies[chip][-1] / sum(self.dt_walls)))
 
         if self.debug and False:
             plt.clf()
@@ -589,16 +621,17 @@ class IbisEtc(object):
             plt.suptitle('bias- and median- and V-subtracted images')
             self.ps.savefig()
 
-        # Trim the bottom (bright) pixels off; trim one pixel off the top too!
-        Ntrim = 18
+        # Trim some pixels off the bottom
+        # ... choose 3 to result in 50 x 51 cutouts
+        Ntrim = 3
         orig_h = imgs[0].shape[0]
-        imgs = [img[Ntrim:-1, :] for img in imgs]
+        imgs = [img[Ntrim:, :] for img in imgs]
 
         roi_xsize = 25
         roi_imgs = {}
+        roi = roi_settings['roi']
 
         for i,(img,chip) in enumerate(zip(imgs, chips)):
-            roi = roi_settings['roi']
             x,y = roi[chip]
             ix = int(np.round(x))
             roi_imgs[chip] = roi_img = img[:, ix-roi_xsize : ix+roi_xsize+1]
@@ -625,6 +658,7 @@ class IbisEtc(object):
 
         if self.debug:
             plt.clf()
+            plt.subplots_adjust(hspace=0.25)
 
         orig_roi_imgs = dict((k,v.copy()) for k,v in roi_imgs.items())
         pixsc = nominal_cal.pixscale
@@ -659,10 +693,11 @@ class IbisEtc(object):
                                           tractor.Flux(flux))
                 tr = tractor.Tractor([tim], [src])
                 self.tractors[chip] = tr
-
+                # a second tractor object for instantaneous fitting
+                # (fitting each new ROI image)
+                # do this so that the source params start from last frame's values
                 itr = tr.copy()
                 self.inst_tractors[chip] = itr
-
             else:
                 # we already accumulated the image into tim.data above.
                 tim.sig1 = sig1
@@ -680,17 +715,14 @@ class IbisEtc(object):
                 mx = np.percentile(orig_roi_imgs[chip].ravel(), 95)
                 plt.imshow(orig_roi_imgs[chip], interpolation='nearest', origin='lower',
                            vmin=-5, vmax=mx)
+                plt.xticks([]); plt.yticks([])
                 plt.title(chip + ' new ROI')
                 plt.subplot(3, 4, 5+i)
                 mx = np.percentile(roi_img.ravel(), 95)
                 plt.imshow(roi_img, interpolation='nearest', origin='lower',
                            vmin=sky-3.*sig1, vmax=mx)
+                plt.xticks([]); plt.yticks([])
                 plt.title(chip + ' acc ROI')
-                # plt.subplot(4, 4, 9+i)
-                # mod = tr.getModelImage(0)
-                # plt.imshow(mod, interpolation='nearest', origin='lower',
-                #            vmin=sky-3.*sig1, vmax=mx)
-                # plt.title(chip + ' init mod')
 
             opt_args = dict(shared_params=False)
             X = tr.optimize_loop(**opt_args)
@@ -753,12 +785,19 @@ class IbisEtc(object):
 
         # Instantaneous measurements
         for i,chip in enumerate(self.chipnames):
-            if len(self.sci_times) > 1:
-                iskyrate = ((self.sci_acc_strip_skies[chip][-1] - self.sci_acc_strip_skies[chip][-2]) /
-                            (self.sci_times[-1] - self.sci_times[-2]))
-                print('Count difference:', (self.sci_acc_strip_skies[chip][-1] - self.sci_acc_strip_skies[chip][-2]))
+            # if len(self.sci_times) > 1:
+            #     iskyrate = ((self.sci_acc_strip_skies[chip][-1] - self.sci_acc_strip_skies[chip][-2]) /
+            #                 (self.sci_times[-1] - self.sci_times[-2]))
+            #     print('Count difference:', (self.sci_acc_strip_skies[chip][-1] - self.sci_acc_strip_skies[chip][-2]))
+            # else:
+            #     iskyrate = self.sci_acc_strip_skies[chip][-1] / self.sci_times[-1]
+
+            if len(self.dt_walls) > 1:
+                iskyrate = ((self.acc_strip_skies[chip][-1] - self.acc_strip_skies[chip][-2]) /
+                            dt_wall)
             else:
-                iskyrate = self.sci_acc_strip_skies[chip][-1] / self.sci_times[-1]
+                iskyrate = self.acc_strip_skies[chip][-1] / dt_wall
+
             iskybr = -2.5 * np.log10(iskyrate /pixsc/pixsc) + self.nom_zp
             # HACK -- arbitrary sky correction to match copilot
             iskybr += DECamGuiderMeasurer.SKY_BRIGHTNESS_CORRECTION
@@ -1671,6 +1710,21 @@ if __name__ == '__main__':
         plt.suptitle('Accumulated strips')
         ps.savefig()
 
+        plt.clf()
+        plt.subplots_adjust(hspace=0)
+        mx = np.percentile(np.hstack([x.ravel() for x in etc.acc_strips.values()]), 98)
+        for i,chip in enumerate(etc.chipnames):
+            plt.subplot(4,1,i+1)
+            rowmed = np.median((etc.acc_biases[chip+'_L'] + etc.acc_biases[chip+'_R'])/2,
+                               axis=1)
+            plt.imshow(etc.acc_strips[chip] - rowmed[:, np.newaxis],
+                       interpolation='nearest', origin='lower',
+                       aspect='auto', vmin=0, vmax=mx)
+            plt.xticks([]); plt.yticks([])
+            plt.ylabel(chip)
+        plt.suptitle('Accumulated strips - row-wise bias')
+        ps.savefig()
+
         # # Re-fit the V model...
         # def get_v_model(slope, w):
         #     xx = np.arange(w)
@@ -1700,29 +1754,77 @@ if __name__ == '__main__':
         # plt.title('Accumulated strips')
         # ps.savefig()
 
+        dt_wall = np.mean(etc.dt_walls)
+        print('Average dt_wall:', dt_wall)
+
         plt.clf()
+        plt.suptitle('ROI sky estimates (counts/pix/sec)')
         for chip in etc.chipnames:
             plt.subplot(2,1,1)
-            plt.plot(etc.strip_skies[chip], '.-', alpha=0.5, label=chip)
-            plt.ylabel('Strip skies (median)')
+            plt.plot(etc.strip_skies[chip]/dt_wall, '.-', alpha=0.5, label=chip)
+            plt.ylabel('median (cps)')
             plt.subplot(2,1,2)
-            plt.plot(etc.strip_skies_2[chip], '.-', alpha=0.5, label=chip)
-            plt.ylabel('Strip skies (fit)')
+            plt.plot(etc.strip_skies_2[chip]/dt_wall, '.-', alpha=0.5, label=chip)
+            plt.ylabel('exp fit (cps)')
         plt.legend()
+        ps.savefig()
+
+        # omit last sample
+        dt_final = np.sum(etc.dt_walls[:-1])
+
+        plt.clf()
+        plt.suptitle('Accumulated images: medians')
+        for chip in etc.chipnames:
+            for iside,side in enumerate(['L','R']):
+                plt.subplot(2,1,iside+1)
+                s = etc.acc_strip_skies[chip+'_'+side]
+                plt.plot(s, '-', alpha=0.5, label=chip + ': %.3f cps' % (s[-2]/dt_final))
+        for iside,side in enumerate(['L','R']):
+            plt.subplot(2,1,iside+1)
+            plt.title('Amp: ' + side)
+            plt.legend()
+        ps.savefig()
+
+        plt.clf()
+        plt.suptitle('Accumulated image medians - bias medians')
+        for chip in etc.chipnames:
+            for iside,side in enumerate(['L','R']):
+                plt.subplot(2,1,iside+1)
+                s = (np.array(etc.acc_strip_skies[chip+'_'+side]) -
+                    np.array(etc.acc_bias_medians[chip+'_'+side]))
+                plt.plot(s, '-', alpha=0.5, label=chip + ': %.3f cps' % (s[-2]/dt_final))
+        for iside,side in enumerate(['L','R']):
+            plt.subplot(2,1,iside+1)
+            plt.title('Amp: ' + side)
+            plt.legend()
+        ps.savefig()
+
+        plt.clf()
+        plt.suptitle('Accumulated image - row-wise bias: medians')
+        for chip in etc.chipnames:
+            for iside,side in enumerate(['L','R']):
+                plt.subplot(2,1,iside+1)
+                s = etc.acc_rowwise_skies[chip+'_'+side]
+                plt.plot(s, '-', alpha=0.5, label=chip + ': %.3f cps' % (s[-2]/dt_final))
+        for iside,side in enumerate(['L','R']):
+            plt.subplot(2,1,iside+1)
+            plt.title('Amp: ' + side)
+            plt.legend()
         ps.savefig()
 
         # Median bias levels (in accumulated bias images)
         plt.clf()
+        plt.suptitle('Accumulated bias images: median levels')
         for iside,side in enumerate(['L','R']):
             plt.subplot(2,1,iside+1)
             for chip in etc.chipnames:
-                plt.plot([np.median(b) for b in etc.all_acc_biases[chip+'_'+side]], '-',
-                         label=chip)
-            plt.title('Amp ' + side)
-        plt.legend()
-        plt.suptitle('Accumulated bias images: median levels')
+                s = etc.acc_bias_medians[chip + '_' + side]
+                plt.plot(s, '-', alpha=0.5, label=chip + ': %.3f cps' % (s[-2]/dt_final))
+        for iside,side in enumerate(['L','R']):
+            plt.subplot(2,1,iside+1)
+            plt.title('Amp: ' + side)
+            plt.legend()
         ps.savefig()
-
 
         # plt.clf()
         # plt.subplots_adjust(hspace=0)
