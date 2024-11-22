@@ -88,7 +88,7 @@ class IbisEtc(object):
         self.goodchips = None
         self.flux0 = None
         self.acc_strips = None
-        self.acc_whole_strips = None
+        #self.acc_whole_strips = None
         self.acc_biases = None
         self.sci_acc_strips = None
         self.strip_skies = None
@@ -364,9 +364,7 @@ class IbisEtc(object):
             phdr = fitsio.read_header(roi_filename)
             troi = datetime_from_header(phdr)
             self.first_roi_datetime = troi
-
             self.rois = roi_settings['roi']
-            
             return
 
         first_time = False
@@ -439,7 +437,7 @@ class IbisEtc(object):
             # Init ROI data structures
 
             self.acc_strips = {}
-            self.acc_whole_strips = {}
+            #self.acc_whole_strips = {}
             self.acc_biases = {}
             self.sci_acc_strips = {}
             self.all_sci_acc_strips = {}
@@ -493,25 +491,24 @@ class IbisEtc(object):
         else:
             dt_wall = (self.roi_datetimes[-1] - self.roi_datetimes[-2]).total_seconds()
             dt_sci = self.sci_times[-1] - self.sci_times[-2]
-        print('Wall time from start of last ROI to start of this one:', dt_wall)
         print('dt sci: %.3f, dt wall: %.3f' % (dt_sci, dt_wall))
-
         self.dt_walls.append(dt_wall)
 
-        # The bottom ~20-25 rows have a strong ramp, even after bias subtraction.
-
-        # The top row can also go wonky!
-        # Estimate the sky level in the remaining pixels
+        # Record things about the full ROI strips...
         for ichip,(chip,img,biases,data_off) in enumerate(zip(chips,imgs,biasvals,data_offs)):
-            subimg = img[25:-1, :]
-            print(chip, 'Data offsets:', data_off)
+            # The chip-assembly function trims off the top row of the ROI, so
+            # the "img" arrays here are 54 x 2048.
+            #subimg = img[25:-1, :]
+            subimg = img
+
+            # The fitted data offset (sky level), averaged between the two amps
             self.strip_skies_2[chip].append(np.mean(data_off))
             self.strip_skies[chip].append(np.median(subimg))
             self.strip_sig1s[chip].append(blanton_sky(subimg, step=3))
             bl,br = biases
             if not chip in self.acc_strips:
                 self.acc_strips[chip] = subimg.copy()
-                self.acc_whole_strips[chip] = img.copy()
+                #self.acc_whole_strips[chip] = img.copy()
                 self.acc_biases[chip+'_L'] = (biasimgs[ichip*2].copy() - bl)
                 self.acc_biases[chip+'_R'] = (biasimgs[ichip*2+1].copy() - br)
                 self.sci_acc_strips[chip] = dt_sci * subimg.copy() / dt_wall
@@ -521,7 +518,7 @@ class IbisEtc(object):
             else:
                 # HACK extraneous .copy(), don't think we need them
                 self.acc_strips[chip] += subimg.copy()
-                self.acc_whole_strips[chip] += img.copy()
+                #self.acc_whole_strips[chip] += img.copy()
                 self.acc_biases[chip+'_L'] += (biasimgs[ichip*2].copy() - bl)
                 self.acc_biases[chip+'_R'] += (biasimgs[ichip*2+1].copy() - br)
                 self.sci_acc_strips[chip] += (dt_sci * subimg.copy() / dt_wall)
@@ -533,11 +530,10 @@ class IbisEtc(object):
             self.acc_strip_skies[chip].append(np.median(self.acc_strips[chip]))
             self.sci_acc_strip_skies[chip].append(np.median(self.sci_acc_strips[chip]))
 
-            print(chip, 'subimage median:', np.median(subimg))
+            #print(chip, 'subimage median:', np.median(subimg))
             #print(chip, 'acc  sky rate:', self.sci_acc_strip_skies[chip][-1] / self.sci_times[-1])
-            print(chip, 'sci acc sky: %.2f' % self.sci_acc_strip_skies[chip][-1])
-
-            print(chip, 'inst sky rate: %.2f counts/sec/pixel' % (self.strip_skies[chip][-1] / dt_wall))
+            #print(chip, 'sci acc sky: %.2f' % self.sci_acc_strip_skies[chip][-1])
+            #print(chip, 'inst sky rate: %.2f counts/sec/pixel' % (self.strip_skies[chip][-1] / dt_wall))
 
         if self.debug:
             plt.clf()
@@ -547,8 +543,8 @@ class IbisEtc(object):
                 plt.subplot(8,1,ichip+1)
                 m = np.median(subimg.ravel())
                 r = 10
-                lo,md,hi = np.percentile(subimg.ravel(), [10,50,90])
-                print(chip, 'subimg percentiles: %.2f %.2f %.2f' % (lo,md,hi))
+                #lo,md,hi = np.percentile(subimg.ravel(), [10,50,90])
+                #print(chip, 'subimg percentiles: %.2f %.2f %.2f' % (lo,md,hi))
                 #plt.imshow(subimg, interpolation='nearest', origin='lower',
                 plt.imshow(img, interpolation='nearest', origin='lower',
                            vmin=m-r, vmax=m+r, aspect='auto')
@@ -566,14 +562,17 @@ class IbisEtc(object):
                 # print(chip, 'sci percentiles: %.2f %.2f %.2f' % (lo, md, hi))
                 # plt.imshow(self.sci_acc_strips[chip], interpolation='nearest', origin='lower',
                 #            vmin=m2-r*10, vmax=m2+r*10, aspect='auto')
-                ss = self.acc_strip_skies[chip]
-                if len(ss) > 1:
-                    m2 = ss[-2] + m
-                else:
-                    m2 = ss[-1] + m
-                #plt.imshow(self.acc_strips[chip], interpolation='nearest', origin='lower',
-                plt.imshow(self.acc_whole_strips[chip], interpolation='nearest', origin='lower',
-                            vmin=m2-r*10, vmax=m2+r*10, aspect='auto')
+                # ss = self.acc_strip_skies[chip]
+                # if len(ss) > 1:
+                #     m2 = ss[-2] + m
+                # else:
+                #     m2 = ss[-1] + m
+                mn,md = np.percentile(self.acc_strips[chip].ravel(), [1,50])
+                mx = md + (md-mn)
+                plt.imshow(self.acc_strips[chip], interpolation='nearest', origin='lower',
+                           vmin=mn, vmax=mx, aspect='auto')
+                #plt.imshow(self.acc_whole_strips[chip], interpolation='nearest', origin='lower',
+                #            vmin=m2-r*10, vmax=m2+r*10, aspect='auto')
                 plt.xticks([]); plt.yticks([])
                 plt.ylabel(chip)
             plt.suptitle('ROI images and Accumulated')
@@ -979,6 +978,9 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None):
             (x0,x1),(y0,y1) = [[int(x) for x in vi] for vi in [w.split(':') for w in datasec]]
             # Trim off last row -- it sometimes glitches!
             y1 -= 1
+            # Also trim off the first row -- it's not glitchy in the same way, but does
+            # seem to have slightly different statistics than the remaining rows.
+            y0 += 1
             maxrow = y1
             dataslice = slice(y0-1, y1), slice(x0-1, x1)
             data_x0, data_y0 = x0-1, y0-1
@@ -989,6 +991,8 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None):
             (x0,x1),(y0,y1) = [[int(x) for x in vi] for vi in [w.split(':') for w in biassec]]
             # Trim off last row -- it sometimes glitches!
             y1 -= 1
+            # And first row
+            y0 += 1
             maxrow = max(maxrow, y1)
             biasslice = slice(y0-1, y1), slice(x0-1, x1)
             bias_x0, bias_y0 = x0-1, y0-1
@@ -999,7 +1003,8 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None):
             # the ROI images are 2048  x 1080 - with only the bottom 55 rows non-zero,
             # so trim down to 55 x 1080 here.
             # There is some prescan before the image, and some overscan (bias) after.
-            # Note, the logic below depends on this having the same origin as the full image
+            # Note, the logic in the exponential-decay fitting below depends on this
+            # having the same origin as the full image
             fitimg = img[:maxrow, :].astype(np.float32)
 
             bias_level = 0
@@ -1150,6 +1155,34 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None):
                     plt.ylim(-mx,+mx)
                     plt.title('Data resid')
                     ps.savefig()
+                    # Row plots
+                    plt.clf()
+                    plt.subplot(2,2,1)
+                    off = 2
+                    plt.axhline(off, color='k', alpha=0.5)
+                    plt.plot(off - bias_offset + fitimg[biasslice], 'k-', alpha=0.1)
+                    plt.plot(off + bias_model[:,0], '-', color='orange')
+                    plt.plot(off + bias_model[:,-1], '-', color='orange')
+                    plt.yscale('log')
+                    plt.title('Bias')
+                    plt.subplot(2,2,2)
+                    plt.plot(bias_resid, 'k-', alpha=0.1)
+                    plt.title('Bias resid')
+                    plt.subplot(2,2,3)
+                    plt.axhline(off, color='k', alpha=0.5)
+                    plt.plot(off - data_offset + fitimg[dataslice], 'k-', alpha=0.01)
+                    plt.plot(off + data_model[:,0], '-', color='orange')
+                    plt.plot(off + data_model[:,-1], '-', color='orange')
+                    plt.yscale('log')
+                    plt.title('Data')
+                    plt.xlabel('Row number')
+                    plt.subplot(2,2,4)
+                    mn,md = np.percentile(data_resid.ravel(), [1,50])
+                    plt.plot(data_resid, 'k-', alpha=0.01)
+                    plt.ylim(mn, md+(md-mn))
+                    plt.title('Data resid')
+                    ps.savefig()
+
 
                 #assert(r.success)
 
@@ -1288,11 +1321,17 @@ class DECamGuiderMeasurer(RawMeasurer):
 
         # Estimate noise on sky-subtracted image.
         sig1a = blanton_sky(img - skymod)
+        sig1 = sig1a
 
-        # Estimate noise on 2x2-binned sky-sub image
-        sig2a = blanton_sky(self.bin_image(img - skymod, 2))
-
-        pattern = self.estimate_pattern_noise(img - skymod)
+        # pattern = self.estimate_pattern_noise(img - skymod)
+        # # Estimate noise on sky- and pattern-subtracted image.
+        # sig1b = blanton_sky(img - skymod - pattern)
+        # print('Estimated noise before & after pattern noise removal: %.1f, %.1f' % (sig1a, sig1b))
+        # sig1 = sig1b
+        # # Estimate noise on 2x2-binned sky-sub image
+        # sig2a = blanton_sky(self.bin_image(img - skymod, 2))
+        # sig2b = blanton_sky(self.bin_image(img - skymod - pattern, 2))
+        # print('Estimated noise on 2x2 binned image, before & after pattern noise removal: %.1f, %.1f' % (sig2a, sig2b))
 
         if self.debug:
             plt.clf()
@@ -1375,20 +1414,8 @@ class DECamGuiderMeasurer(RawMeasurer):
             plt.xlabel('Image pixel values (ADU)')
             plt.legend()
             self.ps.savefig()
-            
-
-        # Estimate noise on sky- and pattern-subtracted image.
-        sig1b = blanton_sky(img - skymod - pattern)
-
-        # Estimate noise on 2x2-binned sky-sub image
-        sig2b = blanton_sky(self.bin_image(img - skymod - pattern, 2))
 
         skymod += pattern
-
-        print('Estimated noise before & after pattern noise removal: %.1f, %.1f' % (sig1a, sig1b))
-        print('Estimated noise on 2x2 binned image, before & after pattern noise removal: %.1f, %.1f' % (sig2a, sig2b))
-        sig1 = sig1b
-
         return skymod, sky1, sig1
 
     def bin_image(self, img, N):
@@ -1559,31 +1586,6 @@ def compute_shift_all(roi_settings):
 
     return dict(shift_all=shift_all, after_rows=after_Rows, skip=skip)
 
-    '''
-As an example, I looked for the logs on the image number you mention, exposure number 1278659:
-
-2024-02-28T23:56:21 command: set exptime 600.000000
-2024-02-28T23:56:21 imediateReply: DONE
-2024-02-28T23:56:21 command: set seqdelay 200
-
-2024-02-28T23:59:22 command: set SHIFT_ALL 1884
-2024-02-28T23:59:22 imediateReply: DONE
-2024-02-28T23:59:22 command: set AFTER_ROWS 1277
-2024-02-28T23:59:22 imediateReply: DONE
-2024-02-28T23:59:22 command: memory write 4 none 0x1 loc 0x0490
-2024-02-28T23:59:22 imediateReply: DONE
-2024-02-28T23:59:22 command: memory write 2 none 0x3 loc 0x0000
-2024-02-28T23:59:22 imediateReply: DONE
-2024-02-28T23:59:22 command: memory write 4 none 0x3 loc 0x02f4
-2024-02-28T23:59:22 imediateReply: DONE
-2024-02-28T23:59:22 command: memory write 4 none 0x2 loc 0x015d
-'''
-
-    #'guide_ccds' : ['GN1','GN2','GS1','GS2'],
-    #"slot":{'GN1':4,  'GN2': 2, 'GS1': 4, 'GS2' : 4},                    # DHE slot for CB controlling the CCDs
-    #"skipReg":{'GN1':1,  'GN2': 3, 'GS1': 3, 'GS2' : 2},                 # CB registers for skip rows for the CCDs
-
-
 if __name__ == '__main__':
     import json
     import pickle
@@ -1606,18 +1608,9 @@ if __name__ == '__main__':
     # GN1: 0.271
     # GN2: 0.253
 
-    # ROI: cumulative:
-    # GS1: 0.71
-    # GS2: 0.67
-    # GN1: 0.68
-    # GN2: 0.65
-
     # RAW image:
     # N4: 1.154, but gains = 4.025 4.077
     # -> 0.284
-
-
-
 
     metadata = {}
     from obsdb import django_setup
@@ -1772,60 +1765,70 @@ if __name__ == '__main__':
         plt.suptitle('Accumulated strips')
         ps.savefig()
 
-        def get_v_model(slope, w):
-            xx = np.arange(w)
-            v_model = np.abs(xx - (w/2 - 0.5)) * slope
-            return v_model
-
-        def objective(params, strip):
-            offset, slope = params
-            w = len(strip)
-            v_model = get_v_model(slope, w)
-            return np.sum(np.abs(strip - (offset + v_model)))
-
-        plt.clf()
-        mn = 1e6
-        slopes = []
-        for i,chip in enumerate(etc.chipnames):
-            
-            m = np.median(etc.acc_strips[chip], axis=0)
-            mn = min(mn, min(m))
-            plt.plot(m, '-', alpha=0.2)
-
-            r = scipy.optimize.minimize(objective, [0.,0.], args=(m,),
-                                        method='Nelder-Mead')
-            offset,slope = r.x
-            v_model = get_v_model(slope, len(m))
-            print('Slope', slope)
-            plt.plot(v_model + offset, '--')
-            slopes.append(slope)
-        print('Avg slope:', np.mean(slopes) / len(etc.acc_strip_skies[chip]))
-            
-        plt.ylim(mn, mn+100)
-        plt.title('Accumulated strips')
-        ps.savefig()
+        # # Re-fit the V model...
+        # def get_v_model(slope, w):
+        #     xx = np.arange(w)
+        #     v_model = np.abs(xx - (w/2 - 0.5)) * slope
+        #     return v_model
+        # def objective(params, strip):
+        #     offset, slope = params
+        #     w = len(strip)
+        #     v_model = get_v_model(slope, w)
+        #     return np.sum(np.abs(strip - (offset + v_model)))
+        # plt.clf()
+        # mn = 1e6
+        # slopes = []
+        # for i,chip in enumerate(etc.chipnames):
+        #     m = np.median(etc.acc_strips[chip], axis=0)
+        #     mn = min(mn, min(m))
+        #     plt.plot(m, '-', alpha=0.2)
+        #     r = scipy.optimize.minimize(objective, [0.,0.], args=(m,),
+        #                                 method='Nelder-Mead')
+        #     offset,slope = r.x
+        #     v_model = get_v_model(slope, len(m))
+        #     print('Slope', slope)
+        #     plt.plot(v_model + offset, '--')
+        #     slopes.append(slope)
+        # print('Avg slope:', np.mean(slopes) / len(etc.acc_strip_skies[chip]))
+        # plt.ylim(mn, mn+100)
+        # plt.title('Accumulated strips')
+        # ps.savefig()
 
         plt.clf()
         for chip in etc.chipnames:
             plt.subplot(2,1,1)
-            plt.plot(etc.strip_skies[chip], '.-', label=chip)
+            plt.plot(etc.strip_skies[chip], '.-', alpha=0.5, label=chip)
+            plt.ylabel('Strip skies (median)')
             plt.subplot(2,1,2)
-            plt.plot(etc.strip_skies_2[chip], '.-', label=chip)
-        plt.ylabel('Strip skies')
+            plt.plot(etc.strip_skies_2[chip], '.-', alpha=0.5, label=chip)
+            plt.ylabel('Strip skies (fit)')
         plt.legend()
         ps.savefig()
 
+        # Median bias levels (in accumulated bias images)
         plt.clf()
-        plt.subplots_adjust(hspace=0)
-        mx = np.percentile(np.hstack([x.ravel() for x in etc.acc_strips.values()]), 98)
-        for i,chip in enumerate(etc.chipnames):
-            plt.subplot(4,1,i+1)
-            plt.imshow(etc.sci_acc_strips[chip], interpolation='nearest', origin='lower',
-                       aspect='auto', vmin=0, vmax=mx)
-            plt.xticks([]); plt.yticks([])
-            plt.ylabel(chip)
-        plt.suptitle('Science-weighted accumulated strips')
+        for iside,side in enumerate(['L','R']):
+            plt.subplot(2,1,iside+1)
+            for chip in etc.chipnames:
+                plt.plot([np.median(b) for b in etc.all_acc_biases[chip+'_'+side]], '-',
+                         label=chip)
+            plt.title('Amp ' + side)
+        plt.legend()
+        plt.suptitle('Accumulated bias images: median levels')
         ps.savefig()
+
+
+        # plt.clf()
+        # plt.subplots_adjust(hspace=0)
+        # mx = np.percentile(np.hstack([x.ravel() for x in etc.acc_strips.values()]), 98)
+        # for i,chip in enumerate(etc.chipnames):
+        #     plt.subplot(4,1,i+1)
+        #     plt.imshow(etc.sci_acc_strips[chip], interpolation='nearest', origin='lower',
+        #                aspect='auto', vmin=0, vmax=mx)
+        #     plt.xticks([]); plt.yticks([])
+        #     plt.ylabel(chip)
+        # plt.suptitle('Science-weighted accumulated strips')
+        # ps.savefig()
 
         plt.clf()
         cmap = matplotlib.cm.jet
@@ -1852,13 +1855,15 @@ if __name__ == '__main__':
 
         plt.clf()
         plt.subplots_adjust(hspace=0.1)
+        allpix = np.hstack([v[-1].ravel() for v in etc.all_acc_biases.values()])
+        mn,mx = np.percentile(allpix, [1, 99])
         for i,chip in enumerate(etc.chipnames):
             for k,side in enumerate(['_L','_R']):
                 plt.subplot(2,4,2*i+k+1)
                 plt.imshow(etc.all_acc_biases[chip+side][-1], interpolation='nearest',
-                           origin='lower')
+                           origin='lower', vmin=mn, vmax=mx)
                 plt.title(chip+side)
-        plt.suptitle('Bias images')
+        plt.suptitle('Accumulated bias images')
         ps.savefig()
 
         plt.clf()
@@ -1908,17 +1913,17 @@ if __name__ == '__main__':
         # plt.suptitle('Accumulated strips & biases')
         # ps.savefig()
 
-        plt.clf()
-        plt.subplots_adjust(hspace=0)
-        mx = np.percentile(np.hstack([x.ravel() for x in etc.acc_whole_strips.values()]), 95)
-        for i,chip in enumerate(etc.chipnames):
-            plt.subplot(4,1,i+1)
-            plt.imshow(etc.acc_whole_strips[chip], interpolation='nearest', origin='lower',
-                       aspect='auto', vmin=0, vmax=mx)
-            plt.xticks([]); plt.yticks([])
-            plt.ylabel(chip)
-        plt.suptitle('Accumulated strips (full)')
-        ps.savefig()
+        # plt.clf()
+        # plt.subplots_adjust(hspace=0)
+        # mx = np.percentile(np.hstack([x.ravel() for x in etc.acc_whole_strips.values()]), 95)
+        # for i,chip in enumerate(etc.chipnames):
+        #     plt.subplot(4,1,i+1)
+        #     plt.imshow(etc.acc_whole_strips[chip], interpolation='nearest', origin='lower',
+        #                aspect='auto', vmin=0, vmax=mx)
+        #     plt.xticks([]); plt.yticks([])
+        #     plt.ylabel(chip)
+        # plt.suptitle('Accumulated strips (full)')
+        # ps.savefig()
 
         plt.clf()
         for i,chip in enumerate(etc.chipnames):
@@ -1948,7 +1953,7 @@ if __name__ == '__main__':
 
         plt.clf()
         for chip in etc.chipnames:
-            plt.plot(etc.sci_times, etc.inst_seeing[chip], '.-', label=chip)
+            plt.plot(etc.sci_times[:-1], etc.inst_seeing[chip][:-1], '.-', label=chip)
         plt.plot(etc.sci_times, etc.cumul_seeing, 'k.-', label='Average')
         plt.legend()
         plt.xlabel('Science exposure time (sec)')
@@ -1957,8 +1962,8 @@ if __name__ == '__main__':
 
         plt.clf()
         for chip in etc.chipnames:
-            plt.plot(etc.sci_times, etc.inst_seeing_2[chip], '.-', label=chip)
-        plt.plot(etc.sci_times, etc.cumul_seeing, 'k.-', label='Cumulative')
+            plt.plot(etc.sci_times[:-1], etc.inst_seeing_2[chip][:-1], '.-', label=chip)
+        plt.plot(etc.sci_times[:-1], etc.cumul_seeing[:-1], 'k.-', label='Cumulative')
         plt.legend()
         plt.xlabel('Science exposure time (sec)')
         plt.ylabel('Instantaneous Seeing (arcsec)')
@@ -1966,8 +1971,8 @@ if __name__ == '__main__':
 
         plt.clf()
         for chip in etc.chipnames:
-            plt.plot(etc.sci_times, etc.inst_transparency[chip], '.-', label=chip)
-        plt.plot(etc.sci_times, etc.cumul_transparency, 'k.-', label='Cumulative')
+            plt.plot(etc.sci_times[:-1], etc.inst_transparency[chip][:-1], '.-', label=chip)
+        plt.plot(etc.sci_times[:-1], etc.cumul_transparency[:-1], 'k.-', label='Cumulative')
         plt.legend()
         plt.xlabel('Science exposure time (sec)')
         plt.ylabel('Transparency (instantaneous)')
@@ -1982,8 +1987,8 @@ if __name__ == '__main__':
 
         plt.clf()
         for chip in etc.chipnames:
-            plt.plot(etc.sci_times, etc.inst_sky[chip], '.-', label=chip)
-        plt.plot(etc.sci_times, etc.cumul_sky, 'k.-', label='Cumulative')
+            plt.plot(etc.sci_times[:-1], etc.inst_sky[chip][:-1], '.-', label=chip)
+        plt.plot(etc.sci_times[:-1], etc.cumul_sky[:-1], 'k.-', label='Cumulative')
         plt.legend()
         plt.xlabel('Science exposure time (sec)')
         plt.ylabel('Sky brightness (instantaneous) (mag/arcsec^2)')
@@ -1994,8 +1999,8 @@ if __name__ == '__main__':
         for chip in etc.chipnames:
             isky = np.array(etc.strip_skies_2[chip]) / np.array(etc.dt_walls)
             avgsky += isky
-            plt.plot(etc.sci_times, isky, '.-', alpha=0.5, label=chip)
-        plt.plot(etc.sci_times, avgsky/len(etc.chipnames), 'k-', label='Average')
+            plt.plot(etc.sci_times[:-1], isky[:-1], '.-', alpha=0.5, label=chip)
+        plt.plot(etc.sci_times[:-1], avgsky[:-1]/len(etc.chipnames), 'k-', label='Average')
         plt.legend()
         plt.xlabel('Science exposure time (sec)')
         plt.ylabel('Sky brightness (instantaneous) (counts/pixel/sec)')
@@ -2007,8 +2012,7 @@ if __name__ == '__main__':
             isky = np.array(etc.strip_skies_2[chip]) / np.array(etc.dt_walls)
             pixsc = nominal_cal.pixscale
             skybr = -2.5 * np.log10(isky /pixsc/pixsc) + etc.nom_zp
-            plt.plot(etc.sci_times, skybr, '.-', label=chip)
-        #plt.plot(etc.sci_times, etc.cumul_sky, 'k.-', label='Cumulative')
+            plt.plot(etc.sci_times[:-1], skybr[:-1], '.-', label=chip)
         plt.legend()
         plt.xlabel('Science exposure time (sec)')
         plt.ylabel('Sky brightness (instantaneous) (mag/arcsec^2)')
@@ -2044,12 +2048,12 @@ if __name__ == '__main__':
         efftime_airmass = 10.**-(0.8 * fid.k_co * (etc.airmass - 1.))
         efftime_sky = 10.**(0.4 * (skybr - fid.skybright))
         efftime_ebv = 10.**(-0.8 * fid.A_co * ebv)
-        plt.semilogy(exptimes, efftime_seeing, '-', label='Seeing')
-        plt.semilogy(exptimes, efftime_trans, '-', label='Transparency')
-        plt.semilogy(exptimes, efftime_sky, '-', label='Sky brightness')
+        plt.semilogy(exptimes[:-1], efftime_seeing[:-1], '-', label='Seeing')
+        plt.semilogy(exptimes[:-1], efftime_trans[:-1], '-', label='Transparency')
+        plt.semilogy(exptimes[:-1], efftime_sky[:-1], '-', label='Sky brightness')
         plt.axhline(efftime_airmass, color='r', label='Airmass')
         plt.axhline(efftime_ebv, color='0.5', label='Dust extinction')
-        plt.semilogy(exptimes, 1. / expfactor_inst, 'k-', label='Total')
+        plt.semilogy(exptimes[:-1], 1. / expfactor_inst[:-1], 'k-', label='Total')
         plt.xlim(exptimes.min(), exptimes.max())
         plt.legend()
         plt.ylabel('Efftime factor')
@@ -2070,12 +2074,12 @@ if __name__ == '__main__':
         efftime_airmass = 10.**-(0.8 * fid.k_co * (etc.airmass - 1.))
         efftime_sky = 10.**(0.4 * (np.array(etc.cumul_sky) - fid.skybright))
         efftime_ebv = 10.**(-0.8 * fid.A_co * ebv)
-        plt.semilogy(exptimes, efftime_seeing, '-', label='Seeing')
-        plt.semilogy(exptimes, efftime_trans, '-', label='Transparency')
-        plt.semilogy(exptimes, efftime_sky, '-', label='Sky brightness')
+        plt.semilogy(exptimes[:-1], efftime_seeing[:-1], '-', label='Seeing')
+        plt.semilogy(exptimes[:-1], efftime_trans[:-1], '-', label='Transparency')
+        plt.semilogy(exptimes[:-1], efftime_sky[:-1], '-', label='Sky brightness')
         plt.axhline(efftime_airmass, color='r', label='Airmass')
         plt.axhline(efftime_ebv, color='0.5', label='Dust extinction')
-        plt.semilogy(exptimes, 1. / expfactor_cumul, 'k-', label='Total')
+        plt.semilogy(exptimes[:-1], 1. / expfactor_cumul[:-1], 'k-', label='Total')
         plt.xlim(exptimes.min(), exptimes.max())
         plt.legend()
         plt.ylabel('Efftime factor')
@@ -2084,7 +2088,7 @@ if __name__ == '__main__':
         ps.savefig()
 
         plt.clf()
-        plt.plot(exptimes, exptimes / expfactor_cumul, '.-')
+        plt.plot(exptimes[:-1], (exptimes / expfactor_cumul)[:-1], '.-')
         plt.xlabel('Science exposure time (sec)')
         plt.ylabel('Effective time (sec)')
         ps.savefig()
