@@ -496,32 +496,30 @@ class IbisEtc(object):
         for ichip,(chip,img,biases,data_off) in enumerate(zip(chips,imgs,biasvals,data_offs)):
             # The chip-assembly function trims off the top & bottom row of the ROI, so
             # the "img" arrays here are 53 x 2048.
-            #subimg = img[25:-1, :]
-            subimg = img
 
             # The fitted data offset (sky level), averaged between the two amps
             self.strip_skies_2[chip].append(np.mean(data_off))
-            self.strip_skies[chip].append(np.median(subimg))
-            self.strip_sig1s[chip].append(blanton_sky(subimg, step=3))
+            self.strip_skies_2[chip+'_L'].append(data_off[0])
+            self.strip_skies_2[chip+'_R'].append(data_off[1])
+
+            self.strip_skies[chip].append(np.median(img))
+            self.strip_sig1s[chip].append(blanton_sky(img, step=3))
             bl,br = biases
-            # Record the fitted data offsets (sky levels) for left and right amps
-            self.strip_skies_2[chip+'_L'].append(data_off[0] - bl)
-            self.strip_skies_2[chip+'_R'].append(data_off[1] - br)
 
             if first_time:
-                self.acc_strips[chip] = subimg.copy()
-                self.acc_biases[chip+'_L'] = (biasimgs[ichip*2].copy() - bl)
+                self.acc_strips[chip] = img.copy()
+                self.acc_biases[chip+'_L'] = (biasimgs[ichip*2  ].copy() - bl)
                 self.acc_biases[chip+'_R'] = (biasimgs[ichip*2+1].copy() - br)
-                self.sci_acc_strips[chip] = dt_sci * subimg.copy() / dt_wall
+                self.sci_acc_strips[chip] = dt_sci * img.copy() / dt_wall
                 self.all_sci_acc_strips[chip] = [self.sci_acc_strips[chip].copy()]
                 self.all_acc_biases[chip+'_L'] = [self.acc_biases[chip+'_L'].copy()]
                 self.all_acc_biases[chip+'_R'] = [self.acc_biases[chip+'_R'].copy()]
             else:
                 # HACK extraneous .copy(), don't think we need them
-                self.acc_strips[chip] += subimg.copy()
-                self.acc_biases[chip+'_L'] += (biasimgs[ichip*2].copy() - bl)
+                self.acc_strips[chip] += img.copy()
+                self.acc_biases[chip+'_L'] += (biasimgs[ichip*2  ].copy() - bl)
                 self.acc_biases[chip+'_R'] += (biasimgs[ichip*2+1].copy() - br)
-                self.sci_acc_strips[chip] += (dt_sci * subimg.copy() / dt_wall)
+                self.sci_acc_strips[chip] += (dt_sci * img.copy() / dt_wall)
                 self.all_sci_acc_strips[chip].append(self.sci_acc_strips[chip].copy())
                 self.all_acc_biases[chip+'_L'].append(self.acc_biases[chip+'_L'].copy())
                 self.all_acc_biases[chip+'_R'].append(self.acc_biases[chip+'_R'].copy())
@@ -538,117 +536,22 @@ class IbisEtc(object):
         if self.debug:
             plt.clf()
             plt.subplots_adjust(hspace=0)
+            mn,md = np.percentile(np.hstack([img.ravel() for img in imgs]), [1,50])
             for ichip,(chip,img) in enumerate(zip(chips,imgs)):
-                subimg = img[25:-1, :]
-                plt.subplot(8,1,ichip+1)
-                m = np.median(subimg.ravel())
-                r = 10
-                #lo,md,hi = np.percentile(subimg.ravel(), [10,50,90])
-                #print(chip, 'subimg percentiles: %.2f %.2f %.2f' % (lo,md,hi))
-                #plt.imshow(subimg, interpolation='nearest', origin='lower',
+                plt.subplot(8, 1, ichip+1)
                 plt.imshow(img, interpolation='nearest', origin='lower',
-                           vmin=m-r, vmax=m+r, aspect='auto')
+                           vmin=mn, vmax=md+(md-mn), aspect='auto')
                 plt.xticks([]); plt.yticks([])
                 plt.ylabel(chip)
+            mn,md = np.percentile(np.hstack([img.ravel() for img in self.acc_strips]), [1,50])
             for ichip,(chip,img) in enumerate(zip(chips,imgs)):
-                plt.subplot(8,1,ichip+5)
-                #m = np.median(self.sci_acc_strips[chip].ravel())
-                # ss = self.sci_acc_strip_skies[chip]
-                # if len(ss) > 1:
-                #     m2 = ss[-2] + m
-                # else:
-                #     m2 = ss[-1] + m
-                # lo,md,hi = np.percentile(self.sci_acc_strips[chip].ravel(), [10,50,90])
-                # print(chip, 'sci percentiles: %.2f %.2f %.2f' % (lo, md, hi))
-                # plt.imshow(self.sci_acc_strips[chip], interpolation='nearest', origin='lower',
-                #            vmin=m2-r*10, vmax=m2+r*10, aspect='auto')
-                # ss = self.acc_strip_skies[chip]
-                # if len(ss) > 1:
-                #     m2 = ss[-2] + m
-                # else:
-                #     m2 = ss[-1] + m
-                mn,md = np.percentile(self.acc_strips[chip].ravel(), [1,50])
-                mx = md + (md-mn)
+                plt.subplot(8, 1, ichip+5)
                 plt.imshow(self.acc_strips[chip], interpolation='nearest', origin='lower',
-                           vmin=mn, vmax=mx, aspect='auto')
+                           vmin=mn, vmax=md+(md-mn), aspect='auto')
                 plt.xticks([]); plt.yticks([])
                 plt.ylabel(chip)
             plt.suptitle('ROI images and Accumulated')
             self.ps.savefig()
-
-            # plt.clf()
-            # for ichip,(chip,biasval) in enumerate(zip(chips,biasvals)):
-            #     bl,br = biasval
-            #     biasl = biasimgs[ichip*2  ] - bl
-            #     biasr = biasimgs[ichip*2+1] - br
-            # 
-            #     # Fit an exponential drop-off plus a constant
-            #     def objective(params, x, b):
-            #         offset, eamp, escale = params
-            #         model = offset + eamp * np.exp(-x / escale)
-            #         return np.sum(np.abs(b - model[:,np.newaxis]))
-            # 
-            #     models = []
-            #     #meds = []
-            #     for bias in [biasl, biasr]:
-            #         # Trim off top row -- it sometimes glitches!
-            #         bias = bias[:-1, :]
-            # 
-            #         plt.subplot(2,1,1)
-            #         plt.plot(np.median(bias, axis=0), '-')
-            #         plt.plot(np.median(bias, axis=1), '-')
-            # 
-            #         med = np.median(bias, axis=1)
-            #         #meds.append(med)
-            #         N,_ = bias.shape
-            #         x = np.arange(N)
-            #         #print('Starting fit...')
-            #         r = scipy.optimize.minimize(objective, (1., med[0], 7.), args=(x, bias),
-            #                                     method='Nelder-Mead')#tol=1e-3)
-            #         #print('bias fit opt result:', r)
-            #         offset, eamp, escale = r.x
-            #         model = offset + eamp * np.exp(-x / escale)
-            #         plt.plot(x, model, '--', color='k', alpha=0.3)
-            #         models.append(model)
-            # 
-            #         plt.subplot(2,1,2)
-            #         plt.plot(med - model, '-')
-            #         plt.xlabel('Overscan row (pixels)')
-            #         plt.ylabel('Row-wise median - model')
-            # plt.suptitle('Bias image vs exponential decay')
-            # self.ps.savefig()
-            # 
-            # def objective2(params, x, b):
-            #     offset, slope, eamp, escale = params
-            #     model = offset + slope * x + eamp * np.exp(-x / escale)
-            #     r = np.sum(np.abs(b - model[:,np.newaxis]))
-            #     return r
-            # 
-            # plt.clf()
-            # for ichip,(chip,img) in enumerate(zip(chips,imgs)):
-            #     # First row doesn't seem to fit the exponential model
-            #     #img = img[1:-1, :]
-            #     # Last row sometimes glitches
-            #     img = img[:-1, :]
-            #     med = np.median(img, axis=1)
-            #     plt.subplot(2,1,1)
-            #     plt.plot(med, '-')
-            #     plt.yscale('log')
-            #     plt.ylim(0.01, 1e3)
-            #     N,_ = img.shape
-            #     x = np.arange(N)
-            #     r = scipy.optimize.minimize(objective2, (1., 0.01, med[0], 7.), args=(x, img),
-            #                                 method='Nelder-Mead')
-            #     offset, slope, eamp, escale = r.x
-            #     model = offset + slope * x + eamp * np.exp(-x / escale)
-            #     plt.plot(x, model, '--', color='k', alpha=0.3)
-            #     plt.subplot(2,1,2)
-            #     plt.plot(med - model, '-')
-            #     plt.ylim(-1, +1)
-            #     plt.xlabel('ROI image row (pixels)')
-            #     plt.ylabel('Row-wise median - model')
-            # plt.suptitle('ROI image vs exponential decay + slope')
-            # self.ps.savefig()
 
         for chip in chips:
             print(chip, 'cumulative sky rate: %.2f counts/sec/pixel' % (self.acc_strip_skies[chip][-1] / sum(self.dt_walls)))
