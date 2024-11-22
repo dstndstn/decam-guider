@@ -89,12 +89,14 @@ class IbisEtc(object):
         self.flux0 = None
         self.acc_strips = None
         self.acc_biases = None
-        self.sci_acc_strips = None
+        #self.sci_acc_strips = None
+        #self.sci_acc_strip_skies = None
+        #self.all_sci_acc_strips = None
+        #self.all_acc_biases = None
         self.strip_skies = None
         self.strip_sig1s = None
         self.acc_strip_skies = None
         self.acc_strip_sig1s = None
-        self.sci_acc_strip_skies = None
         self.roi_apfluxes = None
         self.roi_apskies = None
         self.tractors = None
@@ -437,15 +439,17 @@ class IbisEtc(object):
 
             self.acc_strips = {}
             self.acc_biases = {}
-            self.sci_acc_strips = {}
-            self.all_sci_acc_strips = {}
-            self.all_acc_biases = {}
+            # self.sci_acc_strips = {}
+            # self.sci_acc_strip_skies  = dict((chip,[]) for chip in self.chipnames)
+            # self.all_sci_acc_strips = {}
+            # self.all_acc_biases = {}
             self.strip_skies_2  = dict((chip,[]) for chip in self.chipnames)
+            self.strip_skies_2.update((chip+'_L',[]) for chip in self.chipnames)
+            self.strip_skies_2.update((chip+'_R',[]) for chip in self.chipnames)
             self.strip_skies  = dict((chip,[]) for chip in self.chipnames)
             self.strip_sig1s  = dict((chip,[]) for chip in self.chipnames)
             self.acc_strip_sig1s  = dict((chip,[]) for chip in self.chipnames)
             self.acc_strip_skies  = dict((chip,[]) for chip in self.chipnames)
-            self.sci_acc_strip_skies  = dict((chip,[]) for chip in self.chipnames)
             self.roi_apfluxes = dict((chip,[]) for chip in self.chipnames)
             self.roi_apskies  = dict((chip,[]) for chip in self.chipnames)
             self.tractors = {}
@@ -510,23 +514,23 @@ class IbisEtc(object):
                 self.acc_strips[chip] = img.copy()
                 self.acc_biases[chip+'_L'] = (biasimgs[ichip*2  ].copy() - bl)
                 self.acc_biases[chip+'_R'] = (biasimgs[ichip*2+1].copy() - br)
-                self.sci_acc_strips[chip] = dt_sci * img.copy() / dt_wall
-                self.all_sci_acc_strips[chip] = [self.sci_acc_strips[chip].copy()]
-                self.all_acc_biases[chip+'_L'] = [self.acc_biases[chip+'_L'].copy()]
-                self.all_acc_biases[chip+'_R'] = [self.acc_biases[chip+'_R'].copy()]
+                # self.sci_acc_strips[chip] = dt_sci * img.copy() / dt_wall
+                # self.all_sci_acc_strips[chip] = [self.sci_acc_strips[chip].copy()]
+                # self.all_acc_biases[chip+'_L'] = [self.acc_biases[chip+'_L'].copy()]
+                # self.all_acc_biases[chip+'_R'] = [self.acc_biases[chip+'_R'].copy()]
             else:
                 # HACK extraneous .copy(), don't think we need them
                 self.acc_strips[chip] += img.copy()
                 self.acc_biases[chip+'_L'] += (biasimgs[ichip*2  ].copy() - bl)
                 self.acc_biases[chip+'_R'] += (biasimgs[ichip*2+1].copy() - br)
-                self.sci_acc_strips[chip] += (dt_sci * img.copy() / dt_wall)
-                self.all_sci_acc_strips[chip].append(self.sci_acc_strips[chip].copy())
-                self.all_acc_biases[chip+'_L'].append(self.acc_biases[chip+'_L'].copy())
-                self.all_acc_biases[chip+'_R'].append(self.acc_biases[chip+'_R'].copy())
+                # self.sci_acc_strips[chip] += (dt_sci * img.copy() / dt_wall)
+                # self.all_sci_acc_strips[chip].append(self.sci_acc_strips[chip].copy())
+                # self.all_acc_biases[chip+'_L'].append(self.acc_biases[chip+'_L'].copy())
+                # self.all_acc_biases[chip+'_R'].append(self.acc_biases[chip+'_R'].copy())
 
             self.acc_strip_sig1s[chip].append(blanton_sky(self.acc_strips[chip], step=3))
             self.acc_strip_skies[chip].append(np.median(self.acc_strips[chip]))
-            self.sci_acc_strip_skies[chip].append(np.median(self.sci_acc_strips[chip]))
+            #self.sci_acc_strip_skies[chip].append(np.median(self.sci_acc_strips[chip]))
 
             #print(chip, 'subimage median:', np.median(subimg))
             #print(chip, 'acc  sky rate:', self.sci_acc_strip_skies[chip][-1] / self.sci_times[-1])
@@ -543,7 +547,8 @@ class IbisEtc(object):
                            vmin=mn, vmax=md+(md-mn), aspect='auto')
                 plt.xticks([]); plt.yticks([])
                 plt.ylabel(chip)
-            mn,md = np.percentile(np.hstack([img.ravel() for img in self.acc_strips]), [1,50])
+            mn,md = np.percentile(np.hstack([img.ravel() for img in self.acc_strips.values()]),
+                                  [1,50])
             for ichip,(chip,img) in enumerate(zip(chips,imgs)):
                 plt.subplot(8, 1, ichip+5)
                 plt.imshow(self.acc_strips[chip], interpolation='nearest', origin='lower',
@@ -1233,14 +1238,14 @@ class DECamGuiderMeasurer(RawMeasurer):
         # sig2a = blanton_sky(self.bin_image(img - skymod, 2))
         # sig2b = blanton_sky(self.bin_image(img - skymod - pattern, 2))
         # print('Estimated noise on 2x2 binned image, before & after pattern noise removal: %.1f, %.1f' % (sig2a, sig2b))
-
-        if self.debug:
+        # Patter-noise plots
+        if False and self.debug:
             plt.clf()
             plt.imshow(pattern, interpolation='nearest', origin='lower')
             plt.colorbar()
             plt.title('Pattern noise estimate')
             self.ps.savefig()
-
+            
             plt.clf()
             plt.imshow(img - skymod - pattern, interpolation='nearest', origin='lower',
                        vmin=mn, vmax=mx)
@@ -1315,8 +1320,8 @@ class DECamGuiderMeasurer(RawMeasurer):
             plt.xlabel('Image pixel values (ADU)')
             plt.legend()
             self.ps.savefig()
+        #skymod += pattern
 
-        skymod += pattern
         return skymod, sky1, sig1
 
     def bin_image(self, img, N):
@@ -1731,78 +1736,78 @@ if __name__ == '__main__':
         # plt.suptitle('Science-weighted accumulated strips')
         # ps.savefig()
 
-        plt.clf()
-        cmap = matplotlib.cm.jet
-        for i,chip in enumerate(etc.chipnames):
-            plt.subplot(2,2,i+1)
-            N = len(etc.all_sci_acc_strips[chip])
-            #pcts = np.arange(10, 100, 10)
-            lo,hi = 0,0
-            for j in range(N):
-                l,h = np.percentile(etc.all_sci_acc_strips[chip][j].ravel(), [5,95])
-                lo = min(lo, l)
-                hi = max(hi, h)
-            for j in range(N):
-                h,e = np.histogram(etc.all_sci_acc_strips[chip][j].ravel(), range=(lo,hi),
-                                   bins=25)
-                #plt.hist(etc.all_sci_acc_strips[chip][j].ravel(), range=(lo,hi), bins=25,
-                #         histtype='step', color=cmap(j/N))
-                plt.plot(e[:-1] + (e[1]-e[0])/2., h, '-', alpha=0.2, color=cmap(j/N))
-                plt.axvline(np.median(etc.all_sci_acc_strips[chip][j].ravel()),
-                            color=cmap(j/N), alpha=0.1)
-            plt.title(chip)
-        plt.suptitle('Science-weighted pixel histograms')
-        ps.savefig()
+        # plt.clf()
+        # cmap = matplotlib.cm.jet
+        # for i,chip in enumerate(etc.chipnames):
+        #     plt.subplot(2,2,i+1)
+        #     N = len(etc.all_sci_acc_strips[chip])
+        #     #pcts = np.arange(10, 100, 10)
+        #     lo,hi = 0,0
+        #     for j in range(N):
+        #         l,h = np.percentile(etc.all_sci_acc_strips[chip][j].ravel(), [5,95])
+        #         lo = min(lo, l)
+        #         hi = max(hi, h)
+        #     for j in range(N):
+        #         h,e = np.histogram(etc.all_sci_acc_strips[chip][j].ravel(), range=(lo,hi),
+        #                            bins=25)
+        #         #plt.hist(etc.all_sci_acc_strips[chip][j].ravel(), range=(lo,hi), bins=25,
+        #         #         histtype='step', color=cmap(j/N))
+        #         plt.plot(e[:-1] + (e[1]-e[0])/2., h, '-', alpha=0.2, color=cmap(j/N))
+        #         plt.axvline(np.median(etc.all_sci_acc_strips[chip][j].ravel()),
+        #                     color=cmap(j/N), alpha=0.1)
+        #     plt.title(chip)
+        # plt.suptitle('Science-weighted pixel histograms')
+        # ps.savefig()
 
-        plt.clf()
-        plt.subplots_adjust(hspace=0.1)
-        allpix = np.hstack([v[-1].ravel() for v in etc.all_acc_biases.values()])
-        mn,mx = np.percentile(allpix, [1, 99])
-        for i,chip in enumerate(etc.chipnames):
-            for k,side in enumerate(['_L','_R']):
-                plt.subplot(2,4,2*i+k+1)
-                plt.imshow(etc.all_acc_biases[chip+side][-1], interpolation='nearest',
-                           origin='lower', vmin=mn, vmax=mx)
-                plt.title(chip+side)
-        plt.suptitle('Accumulated bias images')
-        ps.savefig()
+        # plt.clf()
+        # plt.subplots_adjust(hspace=0.1)
+        # allpix = np.hstack([v[-1].ravel() for v in etc.all_acc_biases.values()])
+        # mn,mx = np.percentile(allpix, [1, 99])
+        # for i,chip in enumerate(etc.chipnames):
+        #     for k,side in enumerate(['_L','_R']):
+        #         plt.subplot(2,4,2*i+k+1)
+        #         plt.imshow(etc.all_acc_biases[chip+side][-1], interpolation='nearest',
+        #                    origin='lower', vmin=mn, vmax=mx)
+        #         plt.title(chip+side)
+        # plt.suptitle('Accumulated bias images')
+        # ps.savefig()
+        # 
+        # plt.clf()
+        # for i,chip in enumerate(etc.chipnames):
+        #     for k,side in enumerate(['_L','_R']):
+        #         b = etc.all_acc_biases[chip+side][-1]
+        #         plt.plot(np.median(b, axis=0), '-')
+        #         plt.plot(np.median(b, axis=1), '-')
+        # #plt.yscale('symlog')
+        # plt.suptitle('Bias image medians')
+        # ps.savefig()
 
-        plt.clf()
-        for i,chip in enumerate(etc.chipnames):
-            for k,side in enumerate(['_L','_R']):
-                b = etc.all_acc_biases[chip+side][-1]
-                plt.plot(np.median(b, axis=0), '-')
-                plt.plot(np.median(b, axis=1), '-')
-        #plt.yscale('symlog')
-        plt.suptitle('Bias image medians')
-        ps.savefig()
-
-        plt.clf()
-        plt.subplots_adjust(hspace=0.1)
-        cmap = matplotlib.cm.jet
-        for i,chip in enumerate(etc.chipnames):
-            lo,hi = 0,0
-            for side in ['_L','_R']:
-                N = len(etc.all_acc_biases[chip+side])
-                for j in range(N):
-                    b = etc.all_acc_biases[chip+side][j]
-                    b = b[25:-1,:]
-                    l,h = np.percentile(b.ravel(), [0,95])
-                    lo = min(lo, l)
-                    hi = max(hi, h)
-            for k,side in enumerate(['_L','_R']):
-                plt.subplot(2,4,2*i+k+1)
-                for j in range(N):
-                    b = etc.all_acc_biases[chip+side][j]
-                    b = b[25:-1,:]
-                    h,e = np.histogram(b.ravel(),
-                                       range=(lo,hi), bins=25)
-                    plt.plot(e[:-1] + (e[1]-e[0])/2., h, '-', alpha=0.2, color=cmap(j/N))
-                    #plt.axvline(np.median(etc.all_acc_biases[chip+side][j].ravel()),
-                    #            color=cmap(j/N), alpha=0.1)
-                plt.title(chip+side)
-        plt.suptitle('Bias pixel histograms')
-        ps.savefig()
+        # plt.clf()
+        # plt.subplots_adjust(hspace=0.1)
+        # cmap = matplotlib.cm.jet
+        # for i,chip in enumerate(etc.chipnames):
+        #     lo,hi = 0,0
+        #     for side in ['_L','_R']:
+        #         N = len(etc.all_acc_biases[chip+side])
+        #         for j in range(N):
+        #             b = etc.all_acc_biases[chip+side][j]
+        #             b = b[25:-1,:]
+        #             l,h = np.percentile(b.ravel(), [0,95])
+        #             lo = min(lo, l)
+        #             hi = max(hi, h)
+        #     for k,side in enumerate(['_L','_R']):
+        #         plt.subplot(2,4,2*i+k+1)
+        #         for j in range(N):
+        #             b = etc.all_acc_biases[chip+side][j]
+        #             b = b[25:-1,:]
+        #             h,e = np.histogram(b.ravel(),
+        #                                range=(lo,hi), bins=25)
+        #             plt.plot(e[:-1] + (e[1]-e[0])/2., h, '-', alpha=0.2, color=cmap(j/N))
+        #             #plt.axvline(np.median(etc.all_acc_biases[chip+side][j].ravel()),
+        #             #            color=cmap(j/N), alpha=0.1)
+        #         plt.title(chip+side)
+        # plt.suptitle('Bias pixel histograms')
+        # ps.savefig()
 
         # plt.clf()
         # for i,chip in enumerate(etc.chipnames):
