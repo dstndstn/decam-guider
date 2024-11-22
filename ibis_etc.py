@@ -88,7 +88,6 @@ class IbisEtc(object):
         self.goodchips = None
         self.flux0 = None
         self.acc_strips = None
-        #self.acc_whole_strips = None
         self.acc_biases = None
         self.sci_acc_strips = None
         self.strip_skies = None
@@ -437,7 +436,6 @@ class IbisEtc(object):
             # Init ROI data structures
 
             self.acc_strips = {}
-            #self.acc_whole_strips = {}
             self.acc_biases = {}
             self.sci_acc_strips = {}
             self.all_sci_acc_strips = {}
@@ -496,8 +494,8 @@ class IbisEtc(object):
 
         # Record things about the full ROI strips...
         for ichip,(chip,img,biases,data_off) in enumerate(zip(chips,imgs,biasvals,data_offs)):
-            # The chip-assembly function trims off the top row of the ROI, so
-            # the "img" arrays here are 54 x 2048.
+            # The chip-assembly function trims off the top & bottom row of the ROI, so
+            # the "img" arrays here are 53 x 2048.
             #subimg = img[25:-1, :]
             subimg = img
 
@@ -506,9 +504,12 @@ class IbisEtc(object):
             self.strip_skies[chip].append(np.median(subimg))
             self.strip_sig1s[chip].append(blanton_sky(subimg, step=3))
             bl,br = biases
-            if not chip in self.acc_strips:
+            # Record the fitted data offsets (sky levels) for left and right amps
+            self.strip_skies_2[chip+'_L'].append(data_off[0] - bl)
+            self.strip_skies_2[chip+'_R'].append(data_off[1] - br)
+
+            if first_time:
                 self.acc_strips[chip] = subimg.copy()
-                #self.acc_whole_strips[chip] = img.copy()
                 self.acc_biases[chip+'_L'] = (biasimgs[ichip*2].copy() - bl)
                 self.acc_biases[chip+'_R'] = (biasimgs[ichip*2+1].copy() - br)
                 self.sci_acc_strips[chip] = dt_sci * subimg.copy() / dt_wall
@@ -518,7 +519,6 @@ class IbisEtc(object):
             else:
                 # HACK extraneous .copy(), don't think we need them
                 self.acc_strips[chip] += subimg.copy()
-                #self.acc_whole_strips[chip] += img.copy()
                 self.acc_biases[chip+'_L'] += (biasimgs[ichip*2].copy() - bl)
                 self.acc_biases[chip+'_R'] += (biasimgs[ichip*2+1].copy() - br)
                 self.sci_acc_strips[chip] += (dt_sci * subimg.copy() / dt_wall)
@@ -571,8 +571,6 @@ class IbisEtc(object):
                 mx = md + (md-mn)
                 plt.imshow(self.acc_strips[chip], interpolation='nearest', origin='lower',
                            vmin=mn, vmax=mx, aspect='auto')
-                #plt.imshow(self.acc_whole_strips[chip], interpolation='nearest', origin='lower',
-                #            vmin=m2-r*10, vmax=m2+r*10, aspect='auto')
                 plt.xticks([]); plt.yticks([])
                 plt.ylabel(chip)
             plt.suptitle('ROI images and Accumulated')
@@ -1913,18 +1911,6 @@ if __name__ == '__main__':
         # plt.suptitle('Accumulated strips & biases')
         # ps.savefig()
 
-        # plt.clf()
-        # plt.subplots_adjust(hspace=0)
-        # mx = np.percentile(np.hstack([x.ravel() for x in etc.acc_whole_strips.values()]), 95)
-        # for i,chip in enumerate(etc.chipnames):
-        #     plt.subplot(4,1,i+1)
-        #     plt.imshow(etc.acc_whole_strips[chip], interpolation='nearest', origin='lower',
-        #                aspect='auto', vmin=0, vmax=mx)
-        #     plt.xticks([]); plt.yticks([])
-        #     plt.ylabel(chip)
-        # plt.suptitle('Accumulated strips (full)')
-        # ps.savefig()
-
         plt.clf()
         for i,chip in enumerate(etc.chipnames):
             img, ie, mod = etc.acc_rois[chip]
@@ -1947,7 +1933,6 @@ if __name__ == '__main__':
             plt.subplot(4,5, i*5+5)
             plt.imshow(etc.acc_biases[chip+'_R'], interpolation='nearest', origin='lower')
             plt.xticks([]); plt.yticks([])
-            
         plt.suptitle('Accumulated ROIs')
         ps.savefig()
 
