@@ -1147,10 +1147,10 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None,
                 if subtract_bias:
                     ampimg = ampimg - bias_level
 
-            biasimgs.append(biasimg)
+            biasimgs.append(biasimg.astype(np.float32))
             biasvals.append(bias_level)
             data_offs.append(data_level)
-            ampimgs.append(ampimg)
+            ampimgs.append(ampimg.astype(np.float32))
         biases.append(biasvals)            
         data_offsets.append(data_offs)
         chipnames.append(hdr['DETPOS'])
@@ -1663,7 +1663,10 @@ if __name__ == '__main__':
         else:
             etc = pickle.load(open(statefn, 'rb'))
 
-    #sys.exit(0)
+        # Drop from the state pickle
+        for chip in etc.chipnames:
+            meas,R = etc.chipmeas[chip]
+            del R['image']
 
         state2fn = 'state2-%i.pickle' % expnum
         if not os.path.exists(state2fn):
@@ -1677,8 +1680,8 @@ if __name__ == '__main__':
                 if not os.path.exists(roi_filename):
                     print('Does not exist:', roi_filename)
                     break
-                etc.set_plot_base('roi-%03i' % roi_num)
-                #etc.set_plot_base(None)
+                #etc.set_plot_base('roi-%03i' % roi_num)
+                etc.set_plot_base(None)
                 etc.process_roi_image(roi_settings, roi_num, roi_filename)
 
             etc.shift_all = shift_all
