@@ -6,11 +6,12 @@ import pylab as plt
 import matplotlib
 import time
 
-import pyfftw
+#import pyfftw
 
 import fitsio
 
 from astrometry.util.util import Sip
+from astrometry.util.multiproc import multiproc
 
 from tractor.sfd import SFDMap
 #sys.path.insert(0, 'legacypipe/py')
@@ -26,6 +27,8 @@ import scipy.optimize
 from legacypipe.ps1cat import ps1_to_decam
 
 import tractor
+import tractor.dense_optimizer
+
 import photutils
 
 from astrometry.util.starutil_numpy import hmsstring2ra, dmsstring2dec
@@ -86,6 +89,8 @@ class IbisEtc(object):
         self.nom_zp = None
         self.wcschips = None
         self.goodchips = None
+        # ROIs actually containg a star with flux>1000
+        self.starchips = None
         self.flux0 = None
         self.acc_strips = None
         self.acc_biases = None
@@ -152,15 +157,15 @@ class IbisEtc(object):
         self.wcschips = []
         any_img = False
         for i,(chip,img,biaslr) in enumerate(zip(chipnames, imgs, biases)):
-            imgfn = os.path.join(procdir, '%s-acq-%s.fits' % (expnum, chip))
+            imgfn = os.path.join(procdir, '%s-acq-%s.fits' % (self.expnum, chip))
             imgfns[chip] = imgfn
             # HACK - speed up re-runs
-            wcsfn = os.path.join(procdir, '%s-acq-%s.wcs' % (expnum, chip))
+            wcsfn = os.path.join(procdir, '%s-acq-%s.wcs' % (self.expnum, chip))
             wcsfns[chip] = wcsfn
             if os.path.exists(wcsfn):
                 self.wcschips.append(chip)
                 continue
-            axyfn = os.path.join(procdir, '%s-acq-%s.axy' % (expnum, chip))
+            axyfn = os.path.join(procdir, '%s-acq-%s.axy' % (self.expnum, chip))
             if os.path.exists(axyfn):
                 print('Exists:', axyfn, '-- assuming it will not solve')
                 continue
@@ -437,6 +442,8 @@ class IbisEtc(object):
 
             # Init ROI data structures
 
+            self.starchips = []
+            self.roiflux = {}
             self.acc_strips = {}
             self.acc_biases = {}
             # self.sci_acc_strips = {}
@@ -663,7 +670,13 @@ class IbisEtc(object):
         orig_roi_imgs = dict((k,v.copy()) for k,v in roi_imgs.items())
         pixsc = nominal_cal.pixscale
 
-        for i,chip in enumerate(chips):
+        # If no star was found in first ROI frame, don't try to do tractor fitting
+        if first_time:
+            tractor_chips = chips
+        else:
+            tractor_chips = self.starchips
+
+        for chip in tractor_chips:
             if not first_time:
                 itr = self.inst_tractors[chip]
                 tim = itr.images[0]
@@ -697,18 +710,34 @@ class IbisEtc(object):
                 # (fitting each new ROI image)
                 # do this so that the source params start from last frame's values
                 itr = tr.copy()
+                itr.images[0].psf.freezeParam('weights')
+                itr.optimizer = tractor.dense_optimizer.ConstrainedDenseOptimizer()
+                src = itr.catalog[0]
+                #src.psf.lowers = [0.5, 1.]
+                #src.psf.uppers = [5.,  1.]
                 self.inst_tractors[chip] = itr
             else:
                 # we already accumulated the image into tim.data above.
                 tim.sig1 = sig1
                 tim.inverr[:,:] = 1./sig1
-                tr.optimize_loop(shared_params=False)
 
+            #print('Fitting tractor model to instantaneous image')
             itr.optimize_loop(shared_params=False)
+            #print('done')
             #print('Instantaneous tractor fit:')
             #itr.printThawedParams()
             isee = itr.getParams()[TRACTOR_PARAM_PSFSIGMA] * 2.35 * pixsc
             self.inst_seeing_2[chip].append(isee)
+
+            opt_args = dict(shared_params=False)
+            #print('Fitting tractor model to cumulative image')
+            X = tr.optimize_loop(**opt_args)
+            #print('done')
+            s = tim.psf.getParams()[0]
+            if s < 0:
+                ### Wtf
+                tim.psf.setParams([np.abs(s)])
+                tr.optimize_loop(**opt_args)
 
             if self.debug:
                 plt.subplot(3, 4, 1+i)
@@ -723,16 +752,6 @@ class IbisEtc(object):
                            vmin=sky-3.*sig1, vmax=mx)
                 plt.xticks([]); plt.yticks([])
                 plt.title(chip + ' acc ROI')
-
-            opt_args = dict(shared_params=False)
-            X = tr.optimize_loop(**opt_args)
-            s = tim.psf.getParams()[0]
-            if s < 0:
-                ### Wtf
-                tim.psf.setParams([np.abs(s)])
-                tr.optimize_loop(**opt_args)
-
-            if self.debug:
                 plt.subplot(3, 4, 9+i)
                 mod = tr.getModelImage(0)
                 plt.imshow(mod, interpolation='nearest', origin='lower',
@@ -748,20 +767,21 @@ class IbisEtc(object):
             #  catalog.source0.pos.y = 10.50428514888774
             #  catalog.source0.brightness.Flux = 55101.9692526979
 
-        if first_time:
-            self.roiflux = {}
-            for chip in self.goodchips:
-                self.roiflux[chip] = self.tractor_fits[chip][-1][TRACTOR_PARAM_FLUX]
-                #print(chip, 'Flux in first ROI image:', self.roiflux[chip])
+            if first_time:
+                p = tr.getParams()
+                flux = p[TRACTOR_PARAM_FLUX]
+                if (flux > 1000) and chip in goodchips:
+                    self.starchips.append(chip)
+                    self.roiflux[chip] = flux
+                else:
+                    print('Warning: chip', chip, 'got small tractor flux', flux, ' - ignoring')
 
         if self.debug:
             self.ps.savefig()
 
         # Cumulative measurements
         seeing = (np.mean([self.tractor_fits[chip][-1][TRACTOR_PARAM_PSFSIGMA]
-                           for chip in self.chipnames]) * 2.35 * pixsc)
-        #skyrate = np.mean([self.sci_acc_strip_skies[chip][-1]
-        #                   for chip in self.chipnames]) / self.sci_times[-1]
+                           for chip in self.starchips]) * 2.35 * pixsc)
         skyrate = np.mean([self.acc_strip_skies[chip][-1]
                            for chip in self.chipnames]) / sum(self.dt_walls)
         skybr = -2.5 * np.log10(skyrate /pixsc/pixsc) + self.nom_zp
@@ -769,22 +789,41 @@ class IbisEtc(object):
         skybr += DECamGuiderMeasurer.SKY_BRIGHTNESS_CORRECTION
         skybr = np.mean(skybr)
 
-        # cumulative, sci-averaged transparency
-        itrs = []
+        # cumulative transparency
+        #itrs = []
+        #trs = []
+        # for chip in self.chipnames:
+        #     dflux = np.diff([params[TRACTOR_PARAM_FLUX]
+        #                      for params in self.tractor_fits[chip]])
+        #     flux0 = self.tractor_fits[chip][0][TRACTOR_PARAM_FLUX]
+        #     tr = np.append(1., (dflux / flux0)) * self.transparency
+        #     itrs.append(tr[-1])
+        #     dsci = np.append(self.sci_times[0], np.diff(self.sci_times))
+        #     tr = np.cumsum(tr * dsci) / self.sci_times
+        #     trs.append(tr[-1])
+        # trans = np.mean(trs)
+
+        itrs = {}
         trs = []
-        for chip in self.chipnames:
-            dflux = np.diff([params[TRACTOR_PARAM_FLUX]
-                             for params in self.tractor_fits[chip]])
-            flux0 = self.tractor_fits[chip][0][TRACTOR_PARAM_FLUX]
-            tr = np.append(1., (dflux / flux0)) * self.transparency
-            itrs.append(tr[-1])
-            dsci = np.append(self.sci_times[0], np.diff(self.sci_times))
-            tr = np.cumsum(tr * dsci) / self.sci_times
-            trs.append(tr[-1])
+        for chip in self.starchips:
+            flux2 = self.tractor_fits[chip][-1][TRACTOR_PARAM_FLUX]
+            if len(self.dt_walls) > 1:
+                flux1 = self.tractor_fits[chip][-2][TRACTOR_PARAM_FLUX]
+                tr = (flux2 - flux1) / self.roiflux[chip]
+            else:
+                tr = 1.
+            
+            self.inst_transparency[chip].append(tr * self.transparency)
+            tr = flux2 / len(self.dt_walls) / self.roiflux[chip]
+            trs.append(tr * self.transparency)
         trans = np.mean(trs)
 
+        for chip in self.starchips:
+            isee = self.tractor_fits[chip][-1][TRACTOR_PARAM_PSFSIGMA] * 2.35 * pixsc
+            self.inst_seeing[chip].append(isee)
+
         # Instantaneous measurements
-        for i,chip in enumerate(self.chipnames):
+        for chip in self.chipnames:
             # if len(self.sci_times) > 1:
             #     iskyrate = ((self.sci_acc_strip_skies[chip][-1] - self.sci_acc_strip_skies[chip][-2]) /
             #                 (self.sci_times[-1] - self.sci_times[-2]))
@@ -803,14 +842,10 @@ class IbisEtc(object):
             iskybr += DECamGuiderMeasurer.SKY_BRIGHTNESS_CORRECTION
             self.inst_sky[chip].append(iskybr)
 
-            isee = self.tractor_fits[chip][-1][TRACTOR_PARAM_PSFSIGMA] * 2.35 * pixsc
-            self.inst_seeing[chip].append(isee)
-
-            self.inst_transparency[chip].append(itrs[i])
-
+        SEEING_CORR = DECamGuiderMeasurer.SEEING_CORRECTION_FACTOR
         fid = nominal_cal.fiducial_exptime(self.filt)
         expfactor = exposure_factor(fid, nominal_cal, self.airmass, self.ebv,
-                                    seeing, skybr, trans)
+                                    seeing * SEEING_CORR, skybr, trans)
         efftime = self.sci_times[-1] / expfactor
         print('ROI', roi_num, 'sci exp time %.1f sec' % self.sci_times[-1],
               'efftime %.1f sec' % efftime,
@@ -1160,9 +1195,13 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None,
 
 class DECamGuiderMeasurer(RawMeasurer):
 
-    ZEROPOINT_OFFSET = -2.5 * np.log10(2.24)
-    SKY_BRIGHTNESS_CORRECTION = 0.
-
+    #ZEROPOINT_OFFSET = -2.5 * np.log10(2.24)
+    #SKY_BRIGHTNESS_CORRECTION = 0.
+    ZEROPOINT_OFFSET = -2.5 * np.log10(3.23)
+    #SKY_BRIGHTNESS_CORRECTION = -0.984
+    SKY_BRIGHTNESS_CORRECTION = -0.588
+    SEEING_CORRECTION_FACTOR = 0.916
+    
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.edge_trim = 50
@@ -1217,6 +1256,7 @@ class DECamGuiderMeasurer(RawMeasurer):
         hbias = np.abs(xx - (w/2 - 0.5)) * guider_horiz_slope * self.gain
         skymod = np.zeros(img.shape, np.float32)
         skymod += hbias[np.newaxis,:]
+        del xx,hbias
 
         # Measure and remove a sky background ramp
         ramp = np.median(img - skymod, axis=1)
@@ -1241,7 +1281,7 @@ class DECamGuiderMeasurer(RawMeasurer):
         print('Ramp rate:', m / row_exptime, 'counts/sec')
 
         # Remove sky ramp
-        skymod += (m * x)[:, np.newaxis]
+        skymod += b + (m * x)[:, np.newaxis]
 
         if self.debug:
             plt.clf()
@@ -1261,8 +1301,8 @@ class DECamGuiderMeasurer(RawMeasurer):
             self.ps.savefig()
 
             plt.clf()
-            plt.plot(xx, ramp, '-', label='Row-wise median')
-            plt.plot(xx, b + m*xx, '-', label='Ramp model')
+            plt.plot(x, ramp, '-', label='Row-wise median')
+            plt.plot(x, b + m*x, '-', label='Ramp model')
             plt.legend()
             self.ps.savefig()
 
@@ -1363,6 +1403,9 @@ class DECamGuiderMeasurer(RawMeasurer):
             self.ps.savefig()
         #skymod += pattern
 
+        #print('Median sky residual:', np.median((img - skymod).ravel()))
+        #print('fit offset b:', b)
+        
         return skymod, sky1, sig1
 
     def bin_image(self, img, N):
@@ -1533,68 +1576,11 @@ def compute_shift_all(roi_settings):
 
     return dict(shift_all=shift_all, after_rows=after_Rows, skip=skip)
 
-if __name__ == '__main__':
-    import json
-    import pickle
+import json
+import pickle
 
-    if False:
-        from measure_raw import DECamMeasurer
-        from astrometry.util.plotutils import PlotSequence
-        ps = PlotSequence('meas')
-        # raw image for 1336362
-        imgfn = 'c4d_241029_012100_ori.fits.fz'
-        meas = DECamMeasurer(imgfn, 'N4', nominal_cal)
-        R = meas.run(ps=ps)
-        print(R.keys())
-        sys.exit(0)
-
-    # 1336362: sky levels
-    # ACQ:
-    # GS1: 0.302
-    # GS2: 0.264
-    # GN1: 0.271
-    # GN2: 0.253
-
-    # RAW image:
-    # N4: 1.154, but gains = 4.025 4.077
-    # -> 0.284
-
-    metadata = {}
-    from obsdb import django_setup
-    django_setup(database_filename='decam.sqlite3')
-    from obsdb.models import MeasuredCCD
-    for m in MeasuredCCD.objects.all():
-        metadata[m.expnum] = dict(radec_boresight=(m.rabore, m.decbore),
-                                  airmass=m.airmass)
-    print('Grabbed metadata for', len(metadata), 'exposures from copilot db')
-
-    procdir = 'data-processed2'
-    if not os.path.exists(procdir):
-        try:
-            os.makedirs(procdir)
-        except:
-            pass
-
-    astrometry_config_file = '~/data/INDEXES/5200/cfg'
-
-    # expnum = 1336362
-    # # 1336360:
-    # #kwa = dict(
-    # #    radec_boresight=(351.5373, -1.539),
-    # #    airmass = 1.15)
-    # # 1336361: M438
-    # kwa = dict(
-    #     radec_boresight=(34.8773, -6.181),
-    #     airmass = 1.65)
-
-    # 0.9-second GEXPTIME
-    target_gexptime = 0.9
-    for expnum in [1336362]:
-    #for expnum in range(1336348, 1336450+1):
-    #for expnum in range(1336348, 1336436+1):
-    # 2.0-second GEXPTIME
-    #target_gexptime = 2.0
-    #for expnum in range(1336976, 1337017+1):
+def run_expnum(E):
+    for expnum in [E]:
         print('Expnum', expnum)
         # Maybe no Astrometry.net index files... (not XMM field)
         if expnum in [1336375, 1336397, 1336407, 
@@ -1603,50 +1589,52 @@ if __name__ == '__main__':
             print('Skip')
             continue
 
-        roi_settings = json.load(open('/Users/dstn/ibis-data-transfer/guider-acq/roi_settings_%08i.dat' % expnum))
+        for roi_fn in ['~/ibis-data-transfer/guider-acq/roi_settings_%08i.dat' % expnum,
+                       'data-ETC/roi_settings_%08i.dat' % expnum]:
+            roi_fn = os.path.expanduser(roi_fn)
+            if os.path.exists(roi_fn):
+                break
+
+        for acq_fn in ['~/ibis-data-transfer/guider-acq/DECam_guider_%i/DECam_guider_%i_00000000.fits.gz' % (expnum, expnum),
+                       'data-ETC/DECam_guider_%i/DECam_guider_%i_00000000.fits.gz' % (expnum, expnum),
+                       ]:
+            acq_fn = os.path.expanduser(acq_fn)
+            if os.path.exists(acq_fn):
+                break
+        if not os.path.exists(acq_fn):
+            print('Does not exist:', acq_fn)
+            continue
+        
+        roi_settings = json.load(open(roi_fn, 'r'))
         S = compute_shift_all(roi_settings)
-        print(S)
-
-        # (SHIFT_ALL + AFTER_ROWS + 55) * PAR_SHIFT_TIME  + 438 (roi serial read time + sequence delay) + EXPTIME
-
+        # #print(S)
         shift_all = S['shift_all']
         after_rows = S['after_rows']
+        # par_shift_time = 160e-6
+        # pixel_read_time = 4e-6
+        # seq_delay_time = 200e-3
+        # gexptime = target_gexptime
+        # roi_read = 55 * (par_shift_time + 1080 * pixel_read_time)
+        # print('ROI read time:    %8.3f ms' % (roi_read * 1e3))
+        # print('Shift time:       %8.3f ms' % (shift_all * par_shift_time * 1e3))
+        # print('After shift time: %8.3f ms' % (after_rows * par_shift_time * 1e3))
+        # print('Seq delay time:   %8.3f ms' % (seq_delay_time * 1e3))
+        # print('exposure time:    %8.3f ms' % (gexptime * 1e3))
+        # total_time = (shift_all + after_rows) * par_shift_time + roi_read + seq_delay_time + gexptime
+        # print('Total time:       %8.3f ms' % (total_time * 1e3))
 
-        par_shift_time = 160e-6
-        pixel_read_time = 4e-6
-        seq_delay_time = 200e-3
-        gexptime = target_gexptime
+        kwa = metadata.get(expnum, {})
 
-        roi_read = 55 * (par_shift_time + 1080 * pixel_read_time)
-        print('ROI read time:    %8.3f ms' % (roi_read * 1e3))
-        print('Shift time:       %8.3f ms' % (shift_all * par_shift_time * 1e3))
-        print('After shift time: %8.3f ms' % (after_rows * par_shift_time * 1e3))
-        print('Seq delay time:   %8.3f ms' % (seq_delay_time * 1e3))
-        print('exposure time:    %8.3f ms' % (gexptime * 1e3))
-        
-        total_time = (shift_all + after_rows) * par_shift_time + roi_read + seq_delay_time + gexptime
-        print('Total time:       %8.3f ms' % (total_time * 1e3))
-
-        kwa = metadata[expnum]
-
-        acqfn = '~/ibis-data-transfer/guider-acq/DECam_guider_%i/DECam_guider_%i_00000000.fits.gz' % (expnum, expnum)
-        acqfn = os.path.expanduser(acqfn)
-        
-        if not os.path.exists(acqfn):
-            print('Does not exist:', acqfn)
-            continue
-
-        hdr = fitsio.read_header(acqfn)
+        hdr = fitsio.read_header(acq_fn)
         if float(hdr['GEXPTIME']) != target_gexptime:
             continue
         print('Filter', hdr['FILTER'])
 
         statefn = 'state-%i.pickle' % expnum
         if not os.path.exists(statefn):
-        #if True:
 
             from astrometry.util.starutil import ra2hmsstring, dec2dmsstring
-            phdr = fitsio.read_header(acqfn)
+            phdr = fitsio.read_header(acq_fn)
             fake_header = dict(RA=ra2hmsstring(kwa['radec_boresight'][0], separator=':'),
                             DEC=dec2dmsstring(kwa['radec_boresight'][1], separator=':'),
                             AIRMASS=kwa['airmass'],
@@ -1655,7 +1643,7 @@ if __name__ == '__main__':
             etc = IbisEtc()
             etc.configure(procdir, astrometry_config_file)
             etc.set_plot_base('acq-%i' % expnum)
-            etc.process_guider_acq_image(acqfn, fake_header)
+            etc.process_guider_acq_image(acq_fn, fake_header)
 
             f = open(statefn,'wb')
             pickle.dump(etc, f)
@@ -1671,17 +1659,30 @@ if __name__ == '__main__':
         state2fn = 'state2-%i.pickle' % expnum
         if not os.path.exists(state2fn):
 
-            roi_settings = json.load(open('/Users/dstn/ibis-data-transfer/guider-acq/roi_settings_%08i.dat' % expnum))
+            #roi_settings = json.load(open(roi_fn, 'r'))
 
             for roi_num in range(1, 300):
+            #for roi_num in [1,2]+list(range(170, 300)):
             #for roi_num in range(1, 10):
-                roi_filename = '~/ibis-data-transfer/guider-sequences/%i/DECam_guider_%i_%08i.fits.gz' % (expnum, expnum, roi_num)
-                roi_filename = os.path.expanduser(roi_filename)
-                if not os.path.exists(roi_filename):
+
+                found = False
+
+                for roi_filename in [
+                        ('~/ibis-data-transfer/guider-sequences/%i/DECam_guider_%i_%08i.fits.gz' %
+                         (expnum, expnum, roi_num)),
+                        ('data-ETC/DECam_guider_%i/DECam_guider_%i_%08i.fits.gz' %
+                         (expnum, expnum, roi_num)),
+                        ]:
+                    roi_filename = os.path.expanduser(roi_filename)
+                    if os.path.exists(roi_filename):
+                        found = True
+                        break
+                if not found:
                     print('Does not exist:', roi_filename)
                     break
-                #etc.set_plot_base('roi-%03i' % roi_num)
+                #etc.set_plot_base('roi-%i-%03i' % (expnum, roi_num))
                 etc.set_plot_base(None)
+                #etc.set_plot_base('roi-%03i' % roi_num)
                 etc.process_roi_image(roi_settings, roi_num, roi_filename)
 
             etc.shift_all = shift_all
@@ -1693,8 +1694,6 @@ if __name__ == '__main__':
         else:
             #continue
             etc = pickle.load(open(state2fn, 'rb'))
-
-    #sys.exit(0)
 
         if etc.acc_strips is None:
             print('No ROI images')
@@ -2011,7 +2010,7 @@ if __name__ == '__main__':
         ps.savefig()
 
         plt.clf()
-        for chip in etc.chipnames:
+        for chip in etc.starchips:
             plt.plot(etc.sci_times[:-1], etc.inst_seeing[chip][:-1], '.-', label=chip)
         plt.plot(etc.sci_times, etc.cumul_seeing, 'k.-', label='Average')
         plt.legend()
@@ -2020,7 +2019,7 @@ if __name__ == '__main__':
         ps.savefig()
 
         plt.clf()
-        for chip in etc.chipnames:
+        for chip in etc.starchips:
             plt.plot(etc.sci_times[:-1], etc.inst_seeing_2[chip][:-1], '.-', label=chip)
         plt.plot(etc.sci_times[:-1], etc.cumul_seeing[:-1], 'k.-', label='Cumulative')
         plt.legend()
@@ -2029,7 +2028,7 @@ if __name__ == '__main__':
         ps.savefig()
 
         plt.clf()
-        for chip in etc.chipnames:
+        for chip in etc.starchips:
             plt.plot(etc.sci_times[:-1], etc.inst_transparency[chip][:-1], '.-', label=chip)
         plt.plot(etc.sci_times[:-1], etc.cumul_transparency[:-1], 'k.-', label='Cumulative')
         plt.legend()
@@ -2084,24 +2083,24 @@ if __name__ == '__main__':
         # plt.ylabel('Sky brightness (cumulative) (mag/arcsec^2)')
         # ps.savefig()
 
+        SEEING_CORR = DECamGuiderMeasurer.SEEING_CORRECTION_FACTOR
         # Copilot terminology:
         # efftime = exptime / expfactor
         fid = nominal_cal.fiducial_exptime(etc.filt)
         ebv = etc.ebv
         exptimes = np.array(etc.sci_times)
-        transp = np.vstack([etc.inst_transparency[chip] for chip in etc.chipnames]).mean(axis=0)
+        transp = np.vstack([etc.inst_transparency[chip] for chip in etc.starchips]).mean(axis=0)
         skybr  = np.vstack([etc.inst_sky[chip] for chip in etc.chipnames]).mean(axis=0)
-        seeing = np.vstack([etc.inst_seeing_2[chip] for chip in etc.chipnames]).mean(axis=0)
+        seeing = np.vstack([etc.inst_seeing_2[chip] for chip in etc.starchips]).mean(axis=0)
         expfactor_inst = np.zeros(len(exptimes))
         for i in range(len(exptimes)):
             expfactor = exposure_factor(fid, nominal_cal, etc.airmass, ebv,
-                                        seeing[i], skybr[i], transp[i])
+                                        seeing[i] * SEEING_CORR, skybr[i], transp[i])
             expfactor_inst[i] = expfactor
         pixsc = nominal_cal.pixscale
         plt.clf()
         neff_fid = Neff(fid.seeing, pixsc)
-        #neff     = Neff(np.array(etc.cumul_seeing), pixsc)
-        neff     = Neff(seeing, pixsc)
+        neff     = Neff(seeing * SEEING_CORR, pixsc)
         efftime_seeing = neff_fid / neff
         efftime_trans = transp**2
         efftime_airmass = 10.**-(0.8 * fid.k_co * (etc.airmass - 1.))
@@ -2123,11 +2122,12 @@ if __name__ == '__main__':
         expfactor_cumul = np.zeros(len(exptimes))
         for i in range(len(exptimes)):
             expfactor = exposure_factor(fid, nominal_cal, etc.airmass, ebv,
-                                        etc.cumul_seeing[i], etc.cumul_sky[i],
+                                        etc.cumul_seeing[i] * SEEING_CORR,
+                                        etc.cumul_sky[i],
                                         etc.cumul_transparency[i])
             expfactor_cumul[i] = expfactor
         plt.clf()
-        neff     = Neff(np.array(etc.cumul_seeing), pixsc)
+        neff     = Neff(np.array(etc.cumul_seeing) * SEEING_CORR, pixsc)
         efftime_seeing = neff_fid / neff
         efftime_trans = np.array(etc.cumul_transparency)**2
         efftime_airmass = 10.**-(0.8 * fid.k_co * (etc.airmass - 1.))
@@ -2311,3 +2311,79 @@ if __name__ == '__main__':
 
 
 
+if __name__ == '__main__':
+
+    if False:
+        from measure_raw import DECamMeasurer
+        from astrometry.util.plotutils import PlotSequence
+        ps = PlotSequence('meas')
+        # raw image for 1336362
+        imgfn = 'c4d_241029_012100_ori.fits.fz'
+        meas = DECamMeasurer(imgfn, 'N4', nominal_cal)
+        R = meas.run(ps=ps)
+        print(R.keys())
+        sys.exit(0)
+
+    # 1336362: sky levels
+    # ACQ:
+    # GS1: 0.302
+    # GS2: 0.264
+    # GN1: 0.271
+    # GN2: 0.253
+
+    # RAW image:
+    # N4: 1.154, but gains = 4.025 4.077
+    # -> 0.284
+
+    metadata = {}
+    from obsdb import django_setup
+    django_setup(database_filename='decam.sqlite3')
+    from obsdb.models import MeasuredCCD
+    for m in MeasuredCCD.objects.all():
+        metadata[m.expnum] = dict(radec_boresight=(m.rabore, m.decbore),
+                                  airmass=m.airmass)
+    print('Grabbed metadata for', len(metadata), 'exposures from copilot db')
+
+    procdir = 'data-processed2'
+    if not os.path.exists(procdir):
+        try:
+            os.makedirs(procdir)
+        except:
+            pass
+
+    for fn in ['~/data/INDEXES/5200/cfg',
+               '~/cosmo/work/users/dstn/index-5200/cfg']:
+        fn = os.path.expanduser(fn)
+        if os.path.exists(fn):
+            astrometry_config_file = fn
+            break
+    
+    # expnum = 1336362
+    # # 1336360:
+    # #kwa = dict(
+    # #    radec_boresight=(351.5373, -1.539),
+    # #    airmass = 1.15)
+    # # 1336361: M438
+    # kwa = dict(
+    #     radec_boresight=(34.8773, -6.181),
+    #     airmass = 1.65)
+
+    # 0.9-second GEXPTIME
+    #target_gexptime = 0.9
+    #for expnum in [1336362]:
+    #for expnum in range(1336348, 1336450+1):
+    #for expnum in range(1336348, 1336436+1):
+    # 2.0-second GEXPTIME
+    target_gexptime = 2.0
+    expnums = list(range(1336976, 1337017+1))
+    #expnums = list(range(1336984, 1337017+1))
+
+    #expnums = [1336980, 1336983, 1336993, 1337001]
+    #expnums = [1336981, 1336982, 1336990, 1337000, 1337006, 1337007]
+    #expnums = [1337001]
+    mp = multiproc(40)
+    mp.map(run_expnum, expnums)
+    #for e in expnums:
+    #    run_expnum(e)
+    sys.exit(0)
+    
