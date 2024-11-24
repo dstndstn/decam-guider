@@ -2436,14 +2436,11 @@ class EtcFileWatcher(NewFileWatcher):
         return newestfile
 
     def process_file(self, path):
-        print('process_file:', path)
-
+        #print('process_file:', path)
         fn = os.path.basename(path)
         dirnm = os.path.dirname(path)
-
         if fn.startswith('roi_settings'):
             return False
-        
         if not (fn.startswith('DECam_guider_') and fn.endswith('.fits.gz')):
             print('Unexpect filename pattern:', fn)
             return False
