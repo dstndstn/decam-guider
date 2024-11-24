@@ -2477,7 +2477,7 @@ class EtcFileWatcher(NewFileWatcher):
             self.last_roi = 0
             self.roi_settings = None
             # clear the out-of-order list of previous exposures
-            self.out_of_order = [e,r,p for e,r,p in self.out_of_order if e == self.expnum]
+            self.out_of_order = [(e,r,p) for (e,r,p) in self.out_of_order if e == self.expnum]
             
         elif expnum == self.expnum:
             if roinum != self.last_roi + 1:
