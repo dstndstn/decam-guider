@@ -139,11 +139,21 @@ class IbisEtc(object):
         self.expnum = int(phdr['EXPNUM'])
         self.filt = phdr['FILTER']
 
-        ra = hmsstring2ra(fake_header['RA'])
-        dec = dmsstring2dec(fake_header['DEC'])
-        self.airmass = float(fake_header['AIRMASS'])
-        self.radec = (ra, dec)
-        self.ebv = sfd.ebv(ra, dec)[0]
+        if fake_header is not None and 'RA' in fake_header and 'DEC' in fake_header:
+            ra = hmsstring2ra(fake_header['RA'])
+            dec = dmsstring2dec(fake_header['DEC'])
+            self.radec = (ra, dec)
+            self.ebv = sfd.ebv(ra, dec)[0]
+        else:
+            self.radec = None
+            print('Warning: E(B-V) not known')
+            self.ebv = 0.
+
+        if fake_header is not None and 'AIRMASS' in fake_header:
+            self.airmass = float(fake_header['AIRMASS'])
+        else:
+            print('Warning: airmass not known')
+            self.airmass = 1.
 
         print('Expnum', self.expnum, 'Filter', self.filt)
         self.chipnames = chipnames
@@ -195,10 +205,12 @@ class IbisEtc(object):
                 cmd = cmd + '--plot-scale 0.5 '
             else:
                 cmd = cmd + '--no-plots '
-    
+
             #if radec_boresight is not None:
-            cmd = cmd + '--ra %.4f --dec %.4f --radius 5 ' % (ra, dec)
-    
+            if self.radec is not None:
+                ra,dec = self.radec
+                cmd = cmd + '--ra %.4f --dec %.4f --radius 5 ' % (ra, dec)
+
             cmd = cmd + imgfn
             #cmd = cmd + ' -v --no-delete-temp'
             print(cmd)
@@ -2311,8 +2323,7 @@ def run_expnum(E):
 
 
 
-if __name__ == '__main__':
-
+def batch_main():
     if False:
         from measure_raw import DECamMeasurer
         from astrometry.util.plotutils import PlotSequence
@@ -2387,3 +2398,109 @@ if __name__ == '__main__':
     #    run_expnum(e)
     sys.exit(0)
     
+
+from obsbot import NewFileWatcher
+
+class EtcFileWatcher(NewFileWatcher):
+    def __init__(self, *args, procdir='.', astrometry_config_file=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.procdir = procdir
+        self.astrometry_config_file = astrometry_config_file
+        self.expnum = None
+        self.last_roi = None
+        self.etc = None
+        self.roi_settings = None
+
+    def process_file(self, path):
+        print('process_file:', path)
+
+        fn = os.path.basename(path)
+        dirnm = os.path.dirname(path)
+
+        if fn.startswith('roi_settings'):
+            return False
+        
+        if not (fn.startswith('DECam_guider_') and fn.endswith('.fits.gz')):
+            print('Unexpect filename pattern:', fn)
+            return False
+        trim = fn[len('DECam_guider_'):]
+        trim = trim[:-len('.fits.gz')]
+        print('Trimmed filename:', trim)
+        words = trim.split('_')
+        expnum = int(words[0])
+        roinum = int(words[1])
+        print('Expnum', expnum, 'ROI num', roinum)
+        if expnum != self.expnum and roinum == 0:
+            if self.etc is not None:
+                pfn = os.path.join(self.procdir)
+            print('Starting a new exposure!')
+            # Starting a new exposure!
+            etc = IbisEtc()
+            etc.configure(procdir, astrometry_config_file)
+            etc.set_plot_base('acq-%i' % expnum)
+
+            # kwa = self.fake_metadata.get(expnum, {})
+            # from astrometry.util.starutil import ra2hmsstring, dec2dmsstring
+            # phdr = fitsio.read_header(path)
+            # fake_header = dict(RA=ra2hmsstring(kwa['radec_boresight'][0], separator=':'),
+            #                 DEC=dec2dmsstring(kwa['radec_boresight'][1], separator=':'),
+            #                 AIRMASS=kwa['airmass'],
+            #                 SCI_UT=phdr['UTSHUT'])
+
+            etc.process_guider_acq_image(path)#, fake_header=fake_header)
+            self.etc = etc
+            self.expnum = expnum
+            self.last_roi = 0
+            self.roi_settings = None
+        elif expnum == self.expnum:
+            if roinum != self.last_roi + 1:
+                print('The last ROI frame we saw was', self.last_roi, 'but this one is', roinum)
+                return False
+            if self.roi_settings is None:
+                roi_fn = os.path.join(dirnm, 'roi_settings_%08i.dat' % expnum)
+                print('Looking for ROI settings file:', roi_fn)
+                self.roi_settings = json.load(open(roi_fn, 'r'))
+            self.etc.process_roi_image(self.roi_settings, roinum, path)
+            self.last_roi = roinum
+        else:
+            print('Unexpected: we were processing expnum', self.expnum, 'and new expnum is', expnum, 'and ROI frame number', roinum)
+        return True
+
+    def filter_backlog(self, backlog):
+        return []
+    #def filter_new_files(self, fns):
+    #    return fns
+    #def process_file(self, fn):
+    #    pass
+
+
+if __name__ == '__main__':
+    #procdir = '/tmp/etc/'
+    #astrometry_config_file='/data/declsp/astrometry-index-5200/'
+    #watchdir = '/home3/guider_nfs/ETC/'
+
+    procdir = '/tmp/etc/'
+    astrometry_config_file = '~/data/INDEXES/5200/cfg'
+    watchdir = '/tmp/watch/'
+
+    ## FAKE
+    #metadata = {}
+    #from obsdb import django_setup
+    #django_setup(database_filename='decam.sqlite3')
+    #from obsdb.models import MeasuredCCD
+    #for m in MeasuredCCD.objects.all():
+    #    metadata[m.expnum] = dict(radec_boresight=(m.rabore, m.decbore),
+    #                              airmass=m.airmass)
+    #print('Grabbed metadata for', len(metadata), 'exposures from copilot db')
+
+    if not os.path.exists(procdir):
+        os.makedirs(procdir)
+    etc = EtcFileWatcher(watchdir,
+                         procdir=procdir,
+                         astrometry_config_file=astrometry_config_file)
+    # FAKE
+    #etc.fake_metadata = metadata
+
+    etc.run()
+    #batch_main()
+
