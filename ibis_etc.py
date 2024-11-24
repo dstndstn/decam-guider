@@ -2512,13 +2512,13 @@ class EtcFileWatcher(NewFileWatcher):
 
 
 if __name__ == '__main__':
-    #procdir = '/tmp/etc/'
-    #astrometry_config_file='/data/declsp/astrometry-index-5200/'
-    #watchdir = '/home3/guider_nfs/ETC/'
-
     procdir = '/tmp/etc/'
-    astrometry_config_file = '~/data/INDEXES/5200/cfg'
-    watchdir = '/tmp/watch/'
+    astrometry_config_file='/data/declsp/astrometry-index-5200/cfg'
+    watchdir = '/home3/guider_nfs/ETC/'
+
+    #procdir = '/tmp/etc/'
+    #astrometry_config_file = '~/data/INDEXES/5200/cfg'
+    #watchdir = '/tmp/watch/'
 
     ## FAKE
     #metadata = {}
