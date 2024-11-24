@@ -608,9 +608,9 @@ class IbisEtc(object):
             plt.suptitle('ROI images and Accumulated')
             self.ps.savefig()
 
-        for chip in chips:
-            print(chip, 'cumulative sky rate: %.2f counts/sec/pixel' %
-                  (self.acc_strip_skies[chip][-1] / sum(self.dt_walls)))
+        # for chip in chips:
+        #     print(chip, 'cumulative sky rate: %.2f counts/sec/pixel' %
+        #           (self.acc_strip_skies[chip][-1] / sum(self.dt_walls)))
 
         if self.debug and False:
             plt.clf()
@@ -2477,6 +2477,9 @@ class EtcFileWatcher(NewFileWatcher):
             self.expnum = expnum
             self.last_roi = 0
             self.roi_settings = None
+            # clear the out-of-order list of previous exposures
+            self.out_of_order = [e,r,p for e,r,p in self.out_of_order if e == self.expnum]
+            
         elif expnum == self.expnum:
             if roinum != self.last_roi + 1:
                 print('The last ROI frame we saw was', self.last_roi, 'but this one is', roinum)
@@ -2495,14 +2498,16 @@ class EtcFileWatcher(NewFileWatcher):
 
         # We successfully processed a frame... check if any of the files in the backlog
         # match the next frame we expect!
-        print('Finished processing expnum', self.expnum, 'ROI frame', self.last_roi)
-        print('Checking backlog...')
-        for i,(e,r,p) in enumerate(self.out_of_order):
-            print('  exp', e, 'roi', r, '->', p)
-            if e == self.expnum and r == self.last_roi+1:
-                print('Got it!')
-                del self.out_of_order[i]
-                return self.process_file(p)
+        if len(self.out_of_order):
+            #print('Finished processing expnum', self.expnum, 'ROI frame', self.last_roi)
+            print('Checking backlog...')
+            for i,(e,r,p) in enumerate(self.out_of_order):
+                if e == self.expnum:
+                    print('  exp', e, 'roi', r, '->', p)
+                if e == self.expnum and r == self.last_roi+1:
+                    print('Popping an exposure from the backlog')
+                    del self.out_of_order[i]
+                    return self.process_file(p)
 
         return True
 
