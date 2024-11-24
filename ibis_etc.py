@@ -2411,6 +2411,28 @@ class EtcFileWatcher(NewFileWatcher):
         self.etc = None
         self.roi_settings = None
 
+        self.out_of_order = []
+
+    # def get_newest_file(self, newfiles=None):
+    #     if newfiles is None:
+    #         newfiles = self.get_new_files()
+    #     if len(newfiles) == 0:
+    #         return None
+    #     # Take the one with the latest timestamp.
+    #     latest = None
+    #     newestfile = None
+    #     for fn in newfiles:
+    #         try:
+    #             st = os.stat(fn)
+    #         except OSError as e:
+    #             print('Failed to stat filename', fn, ':', e)
+    #             continue
+    #         t = st.st_mtime
+    #         if latest is None or t > latest:
+    #             newestfile = fn
+    #             latest = t
+    #     return newestfile
+
     def process_file(self, path):
         print('process_file:', path)
 
@@ -2455,6 +2477,7 @@ class EtcFileWatcher(NewFileWatcher):
         elif expnum == self.expnum:
             if roinum != self.last_roi + 1:
                 print('The last ROI frame we saw was', self.last_roi, 'but this one is', roinum)
+                self.out_of_order.append((expnum, roinum, path))
                 return False
             if self.roi_settings is None:
                 roi_fn = os.path.join(dirnm, 'roi_settings_%08i.dat' % expnum)
@@ -2464,6 +2487,20 @@ class EtcFileWatcher(NewFileWatcher):
             self.last_roi = roinum
         else:
             print('Unexpected: we were processing expnum', self.expnum, 'and new expnum is', expnum, 'and ROI frame number', roinum)
+            self.out_of_order.append((expnum, roinum, path))
+            return True
+
+        # We successfully processed a frame... check if any of the files in the backlog
+        # match the next frame we expect!
+        print('Finished processing expnum', self.expnum, 'ROI frame', self.last_roi)
+        print('Checking backlog...')
+        for i,(e,r,p) in enumerate(self.out_of_order):
+            print('  exp', e, 'roi', r, '->', p)
+            if e == self.expnum and r == self.last_roi+1:
+                print('Got it!')
+                del self.out_of_order[i]
+                return self.process_file(p)
+
         return True
 
     def filter_backlog(self, backlog):
