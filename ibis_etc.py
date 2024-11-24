@@ -2463,14 +2463,17 @@ class EtcFileWatcher(NewFileWatcher):
             #etc.set_plot_base('acq-%i' % expnum)
 
             # kwa = self.fake_metadata.get(expnum, {})
-            # from astrometry.util.starutil import ra2hmsstring, dec2dmsstring
-            # phdr = fitsio.read_header(path)
-            # fake_header = dict(RA=ra2hmsstring(kwa['radec_boresight'][0], separator=':'),
-            #                 DEC=dec2dmsstring(kwa['radec_boresight'][1], separator=':'),
-            #                 AIRMASS=kwa['airmass'],
-            #                 SCI_UT=phdr['UTSHUT'])
+            # HACK - XMM
+            kwa = dict(radec_boresight = (36.5, -4.5), airmass=1.0)
 
-            etc.process_guider_acq_image(path)#, fake_header=fake_header)
+            from astrometry.util.starutil import ra2hmsstring, dec2dmsstring
+            phdr = fitsio.read_header(path)
+            fake_header = dict(RA=ra2hmsstring(kwa['radec_boresight'][0], separator=':'),
+                            DEC=dec2dmsstring(kwa['radec_boresight'][1], separator=':'),
+                            AIRMASS=kwa['airmass'],
+                            SCI_UT=phdr['UTSHUT'])
+
+            etc.process_guider_acq_image(path, fake_header=fake_header)
             self.etc = etc
             self.expnum = expnum
             self.last_roi = 0
@@ -2541,6 +2544,7 @@ if __name__ == '__main__':
     etc = EtcFileWatcher(watchdir,
                          procdir=procdir,
                          astrometry_config_file=astrometry_config_file)
+    etc.sleeptime = 1.
     # FAKE
     #etc.fake_metadata = metadata
 
