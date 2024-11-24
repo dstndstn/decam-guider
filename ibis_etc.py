@@ -236,7 +236,7 @@ class IbisEtc(object):
 
         self.chipmeas = {}
         for chip in chipnames:
-            print()
+            #print()
             print('Measuring', chip)
             imgfn = imgfns[chip]
             if chip in self.wcschips:
@@ -245,7 +245,7 @@ class IbisEtc(object):
                 stars = p.get_stars()
             else:
                 wcs = None
-    
+
             ext = 0
             meas = DECamGuiderMeasurer(imgfn, ext, nominal_cal)
             meas.airmass = self.airmass
@@ -494,7 +494,7 @@ class IbisEtc(object):
         F = fitsio.FITS(roi_filename, 'r')
         if self.debug and False:
             self.roi_debug_plots(F)
-        print('Reading', roi_filename)
+        #print('Reading', roi_filename)
         kw = {}
         if self.debug and first_time:
             kw.update(ps=self.ps)
@@ -516,7 +516,7 @@ class IbisEtc(object):
         else:
             dt_wall = (self.roi_datetimes[-1] - self.roi_datetimes[-2]).total_seconds()
             dt_sci = self.sci_times[-1] - self.sci_times[-2]
-        print('dt sci: %.3f, dt wall: %.3f' % (dt_sci, dt_wall))
+        #print('dt sci: %.3f, dt wall: %.3f' % (dt_sci, dt_wall))
         self.dt_walls.append(dt_wall)
 
         # Record things about the full ROI strips...
@@ -859,12 +859,13 @@ class IbisEtc(object):
         expfactor = exposure_factor(fid, nominal_cal, self.airmass, self.ebv,
                                     seeing * SEEING_CORR, skybr, trans)
         efftime = self.sci_times[-1] / expfactor
-        print('ROI', roi_num, 'sci exp time %.1f sec' % self.sci_times[-1],
-              'efftime %.1f sec' % efftime,
+        print('Expnum', self.expnum, self.filt, 'frame', roi_num,
+              'sci exp time %.1f sec' % self.sci_times[-1],
               'seeing %.2f arcsec,' % seeing,
               'sky %.2f mag/arcsec^2,' % skybr,
-              'transparency %.1f %%' % (100.*trans))
-
+              'transparency %.1f %%' % (100.*trans),
+              'efftime %.1f sec' % efftime,
+              )
         self.cumul_sky.append(skybr)
         self.cumul_transparency.append(trans)
         self.cumul_seeing.append(seeing)
@@ -2413,25 +2414,26 @@ class EtcFileWatcher(NewFileWatcher):
 
         self.out_of_order = []
 
-    # def get_newest_file(self, newfiles=None):
-    #     if newfiles is None:
-    #         newfiles = self.get_new_files()
-    #     if len(newfiles) == 0:
-    #         return None
-    #     # Take the one with the latest timestamp.
-    #     latest = None
-    #     newestfile = None
-    #     for fn in newfiles:
-    #         try:
-    #             st = os.stat(fn)
-    #         except OSError as e:
-    #             print('Failed to stat filename', fn, ':', e)
-    #             continue
-    #         t = st.st_mtime
-    #         if latest is None or t > latest:
-    #             newestfile = fn
-    #             latest = t
-    #     return newestfile
+    def get_newest_file(self, newfiles=None):
+        if newfiles is None:
+            newfiles = self.get_new_files()
+        if len(newfiles) == 0:
+            return None
+        # Take the one with the newest timestamp.
+        # --> OLDEST instead here
+        latest = None
+        newestfile = None
+        for fn in newfiles:
+            try:
+                st = os.stat(fn)
+            except OSError as e:
+                print('Failed to stat filename', fn, ':', e)
+                continue
+            t = st.st_mtime
+            if latest is None or t < latest:
+                newestfile = fn
+                latest = t
+        return newestfile
 
     def process_file(self, path):
         print('process_file:', path)
@@ -2447,11 +2449,11 @@ class EtcFileWatcher(NewFileWatcher):
             return False
         trim = fn[len('DECam_guider_'):]
         trim = trim[:-len('.fits.gz')]
-        print('Trimmed filename:', trim)
+        #print('Trimmed filename:', trim)
         words = trim.split('_')
         expnum = int(words[0])
         roinum = int(words[1])
-        print('Expnum', expnum, 'ROI num', roinum)
+        #print('Expnum', expnum, 'ROI num', roinum)
         if expnum != self.expnum and roinum == 0:
             if self.etc is not None:
                 pfn = os.path.join(self.procdir)
@@ -2459,7 +2461,7 @@ class EtcFileWatcher(NewFileWatcher):
             # Starting a new exposure!
             etc = IbisEtc()
             etc.configure(procdir, astrometry_config_file)
-            etc.set_plot_base('acq-%i' % expnum)
+            #etc.set_plot_base('acq-%i' % expnum)
 
             # kwa = self.fake_metadata.get(expnum, {})
             # HACK - XMM
