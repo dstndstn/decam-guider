@@ -2414,25 +2414,26 @@ class EtcFileWatcher(NewFileWatcher):
 
         self.out_of_order = []
 
-    # def get_newest_file(self, newfiles=None):
-    #     if newfiles is None:
-    #         newfiles = self.get_new_files()
-    #     if len(newfiles) == 0:
-    #         return None
-    #     # Take the one with the latest timestamp.
-    #     latest = None
-    #     newestfile = None
-    #     for fn in newfiles:
-    #         try:
-    #             st = os.stat(fn)
-    #         except OSError as e:
-    #             print('Failed to stat filename', fn, ':', e)
-    #             continue
-    #         t = st.st_mtime
-    #         if latest is None or t > latest:
-    #             newestfile = fn
-    #             latest = t
-    #     return newestfile
+    def get_newest_file(self, newfiles=None):
+        if newfiles is None:
+            newfiles = self.get_new_files()
+        if len(newfiles) == 0:
+            return None
+        # Take the one with the newest timestamp.
+        # --> OLDEST instead here
+        latest = None
+        newestfile = None
+        for fn in newfiles:
+            try:
+                st = os.stat(fn)
+            except OSError as e:
+                print('Failed to stat filename', fn, ':', e)
+                continue
+            t = st.st_mtime
+            if latest is None or t < latest:
+                newestfile = fn
+                latest = t
+        return newestfile
 
     def process_file(self, path):
         print('process_file:', path)
