@@ -56,7 +56,7 @@ class IbisEtc(object):
             self.debug = False
         else:
             from astrometry.util.plotutils import PlotSequence
-            self.ps = PlotSequence(os.path.join(procdir, base))
+            self.ps = PlotSequence(os.path.join(self.procdir, base))
             self.debug = True
 
     def configure(self,
@@ -167,15 +167,15 @@ class IbisEtc(object):
         self.wcschips = []
         any_img = False
         for i,(chip,img,biaslr) in enumerate(zip(chipnames, imgs, biases)):
-            imgfn = os.path.join(procdir, '%s-acq-%s.fits' % (self.expnum, chip))
+            imgfn = os.path.join(self.procdir, '%s-acq-%s.fits' % (self.expnum, chip))
             imgfns[chip] = imgfn
             # HACK - speed up re-runs
-            wcsfn = os.path.join(procdir, '%s-acq-%s.wcs' % (self.expnum, chip))
+            wcsfn = os.path.join(self.procdir, '%s-acq-%s.wcs' % (self.expnum, chip))
             wcsfns[chip] = wcsfn
             if os.path.exists(wcsfn):
                 self.wcschips.append(chip)
                 continue
-            axyfn = os.path.join(procdir, '%s-acq-%s.axy' % (self.expnum, chip))
+            axyfn = os.path.join(self.procdir, '%s-acq-%s.axy' % (self.expnum, chip))
             if os.path.exists(axyfn):
                 print('Exists:', axyfn, '-- assuming it will not solve')
                 continue
@@ -1592,16 +1592,10 @@ def compute_shift_all(roi_settings):
 import json
 import pickle
 
-def run_expnum(E):
+def run_expnum(args):
+    E, metadata, procdir, astrometry_config_file = args
     for expnum in [E]:
         print('Expnum', expnum)
-        # Maybe no Astrometry.net index files... (not XMM field)
-        if expnum in [1336375, 1336397, 1336407, 
-                      1336376, 1336413, 1336437, 1336438, 1336439, 1336440, 1336441, 1336442,
-                      1337014, 1337015, 1337016, 1337017]:
-            print('Skip')
-            continue
-
         for roi_fn in ['~/ibis-data-transfer/guider-acq/roi_settings_%08i.dat' % expnum,
                        'data-ETC/roi_settings_%08i.dat' % expnum]:
             roi_fn = os.path.expanduser(roi_fn)
@@ -1636,11 +1630,11 @@ def run_expnum(E):
         # total_time = (shift_all + after_rows) * par_shift_time + roi_read + seq_delay_time + gexptime
         # print('Total time:       %8.3f ms' % (total_time * 1e3))
 
-        kwa = metadata.get(expnum, {})
+        kwa = metadata[expnum]
 
         hdr = fitsio.read_header(acq_fn)
-        if float(hdr['GEXPTIME']) != target_gexptime:
-            continue
+        #if float(hdr['GEXPTIME']) != target_gexptime:
+        #    continue
         print('Filter', hdr['FILTER'])
 
         statefn = 'state-%i.pickle' % expnum
@@ -1743,25 +1737,45 @@ def run_expnum(E):
         ps.savefig()
 
         flatfn = os.path.join('guideflats', 'flat-%s.fits' % etc.filt.lower())
-        chipnames,flats,_,_,_,_ = assemble_full_frames(flatfn,
-                                                       subtract_bias=False, fit_exp=False)
-        assert(chipnames == etc.chipnames)
+        if os.path.exists(flatfn):
+            chipnames,flats,_,_,_,_ = assemble_full_frames(flatfn,
+                                                           subtract_bias=False, fit_exp=False)
+            assert(chipnames == etc.chipnames)
 
-        plt.clf()
-        plt.subplots_adjust(hspace=0)
-        for i,chip in enumerate(etc.chipnames):
-            plt.subplot(4,1,i+1)
-            x,y = etc.rois[chip]
-            ix = int(x)
-            iy = int(y)
-            ylo = max(0, iy-25)
-            plt.imshow(flats[i][ylo:ylo+51, :],
-                       interpolation='nearest', origin='lower',
-                       aspect='auto', vmin=0.8, vmax=1.2)
-            plt.xticks([]); plt.yticks([])
-            plt.ylabel(chip)
-        plt.suptitle('Flats - ROI strips')
-        ps.savefig()
+            plt.clf()
+            plt.subplots_adjust(hspace=0)
+            for i,chip in enumerate(etc.chipnames):
+                plt.subplot(4,1,i+1)
+                x,y = etc.rois[chip]
+                ix = int(x)
+                iy = int(y)
+                ylo = max(0, iy-25)
+                plt.imshow(flats[i][ylo:ylo+51, :],
+                           interpolation='nearest', origin='lower',
+                           aspect='auto', vmin=0.8, vmax=1.2)
+                plt.xticks([]); plt.yticks([])
+                plt.ylabel(chip)
+            plt.suptitle('Flats - ROI strips')
+            ps.savefig()
+
+            plt.clf()
+            plt.subplots_adjust(hspace=0)
+            for i,chip in enumerate(etc.chipnames):
+                plt.subplot(4,1,i+1)
+                S = 150
+                x,y = etc.rois[chip]
+                ix = int(x)
+                iy = int(y)
+                xlo = max(0, ix-S)
+                ylo = max(0, iy-25)
+                plt.imshow(flats[i][ylo:ylo+51, xlo:xlo+2*S],
+                           interpolation='nearest', origin='lower',
+                           #aspect='auto',
+                           vmin=0.8, vmax=1.2)
+                plt.xticks([]); plt.yticks([])
+                plt.ylabel(chip)
+            plt.suptitle('Flats - around ROIs')
+            ps.savefig()
 
         plt.clf()
         plt.subplots_adjust(hspace=0)
@@ -1780,26 +1794,6 @@ def run_expnum(E):
             plt.ylabel(chip)
         plt.suptitle('Accumulated strips - around ROIs')
         ps.savefig()
-
-        plt.clf()
-        plt.subplots_adjust(hspace=0)
-        for i,chip in enumerate(etc.chipnames):
-            plt.subplot(4,1,i+1)
-            S = 150
-            x,y = etc.rois[chip]
-            ix = int(x)
-            iy = int(y)
-            xlo = max(0, ix-S)
-            ylo = max(0, iy-25)
-            plt.imshow(flats[i][ylo:ylo+51, xlo:xlo+2*S],
-                       interpolation='nearest', origin='lower',
-                       #aspect='auto',
-                       vmin=0.8, vmax=1.2)
-            plt.xticks([]); plt.yticks([])
-            plt.ylabel(chip)
-        plt.suptitle('Flats - around ROIs')
-        ps.savefig()
-
 
         # # Re-fit the V model...
         # def get_v_model(slope, w):
@@ -2355,7 +2349,8 @@ def batch_main():
         metadata[m.expnum] = dict(radec_boresight=(m.rabore, m.decbore),
                                   airmass=m.airmass)
     print('Grabbed metadata for', len(metadata), 'exposures from copilot db')
-
+    print('Max expnum:', max(metadata.keys()))
+    
     procdir = 'data-processed2'
     if not os.path.exists(procdir):
         try:
@@ -2386,15 +2381,26 @@ def batch_main():
     #for expnum in range(1336348, 1336450+1):
     #for expnum in range(1336348, 1336436+1):
     # 2.0-second GEXPTIME
-    target_gexptime = 2.0
-    expnums = list(range(1336976, 1337017+1))
+    #target_gexptime = 2.0
+    #expnums = list(range(1336976, 1337017+1))
     #expnums = list(range(1336984, 1337017+1))
 
     #expnums = [1336980, 1336983, 1336993, 1337001]
     #expnums = [1336981, 1336982, 1336990, 1337000, 1337006, 1337007]
     #expnums = [1337001]
+
+    # Maybe no Astrometry.net index files... (not XMM field)
+    # if expnum in [1336375, 1336397, 1336407, 
+    #               1336376, 1336413, 1336437, 1336438, 1336439, 1336440, 1336441, 1336442,
+    #               1337014, 1337015, 1337016, 1337017]:
+    
+    # 2024-11-23
+    expnums = list(range(1342565, 1342587))
+
+    expnums = [e for e in expnums if e in metadata]
+    
     mp = multiproc(40)
-    mp.map(run_expnum, expnums)
+    mp.map(run_expnum, [(e, metadata, procdir, astrometry_config_file) for e in expnums])
     #for e in expnums:
     #    run_expnum(e)
     sys.exit(0)
@@ -2519,6 +2525,9 @@ class EtcFileWatcher(NewFileWatcher):
 
 
 if __name__ == '__main__':
+    #batch_main()
+    #sys.exit(0)
+
     procdir = '/tmp/etc/'
     astrometry_config_file='/data/declsp/astrometry-index-5200/cfg'
     watchdir = '/home3/guider_nfs/ETC/'
@@ -2547,5 +2556,4 @@ if __name__ == '__main__':
     #etc.fake_metadata = metadata
 
     etc.run()
-    #batch_main()
 
