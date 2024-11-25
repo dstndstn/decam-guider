@@ -2492,6 +2492,17 @@ class EtcFileWatcher(NewFileWatcher):
             self.last_roi = roinum
         else:
             print('Unexpected: we were processing expnum', self.expnum, 'and new expnum is', expnum, 'and ROI frame number', roinum)
+            if self.expnum is None:
+                # Add the previous ones to the queue, if they exist, and kick off the backlog
+                ooo = []
+                for roi in range(roinum):
+                    fn = os.path.join(dirnm, 'DECam_guider_%i_%08i.fits.gz' % (expnum, roi))
+                    if os.path.exists(fn):
+                        ooo.append((expnum, roi, fn))
+                if len(ooo):
+                    self.out_of_order.extend(ooo)
+                    _,_,firstfn = ooo[0]
+                    return self.process_file(firstfn)
             self.out_of_order.append((expnum, roinum, path))
             return True
 
