@@ -72,6 +72,7 @@ class IbisEtc(object):
 
     def clear_after_exposure(self):
         # Clear all the data associated with the current science exposure
+        self.stop_efftime = None
         self.sci_datetime = None
         self.acq_datetime = None
         self.acq_exptime = None
@@ -134,6 +135,7 @@ class IbisEtc(object):
         self.acq_exptime = float(phdr['GEXPTIME'])
         self.expnum = int(phdr['EXPNUM'])
         self.filt = phdr['FILTER']
+        print('Expnum', self.expnum, 'Filter', self.filt)
 
         if fake_header is not None and 'RA' in fake_header and 'DEC' in fake_header:
             ra = hmsstring2ra(fake_header['RA'])
@@ -151,7 +153,9 @@ class IbisEtc(object):
             print('Warning: airmass not known')
             self.airmass = 1.
 
-        print('Expnum', self.expnum, 'Filter', self.filt)
+        if fake_header is not None and 'EFFTIME' in fake_header:
+            self.stop_efftime = float(fake_header['EFFTIME'])
+
         self.chipnames = chipnames
         self.imgs = dict(zip(chipnames, imgs))
 
@@ -202,7 +206,6 @@ class IbisEtc(object):
             else:
                 cmd = cmd + '--no-plots '
 
-            #if radec_boresight is not None:
             if self.radec is not None:
                 ra,dec = self.radec
                 cmd = cmd + '--ra %.4f --dec %.4f --radius 5 ' % (ra, dec)
@@ -228,11 +231,9 @@ class IbisEtc(object):
         if self.debug and any_img:
             plt.suptitle(acqfn)
             self.ps.savefig()
-        #state.update(procdir=procdir, goodchips=goodchips, wcsfns=wcsfns, imgfns=imgfns)
 
         self.chipmeas = {}
         for chip in chipnames:
-            #print()
             print('Measuring', chip)
             imgfn = imgfns[chip]
             if chip in self.wcschips:
@@ -829,6 +830,15 @@ class IbisEtc(object):
         self.cumul_transparency.append(trans)
         self.cumul_seeing.append(seeing)
         self.efftimes.append(efftime)
+
+        if self.stop_efftime is not None and efftime > self.stop_efftime:
+            print('Reached the target EFFTIME!')
+            self.stop_exposure()
+
+    def stop_exposure(self):
+        if self.remote_client is not None:
+            print('Stopping exposure!')
+            self.remote_client.stopexposure()
 
     def roi_debug_plots(self, F):
         nguide = 4
@@ -2361,10 +2371,12 @@ def batch_main():
 from obsbot import NewFileWatcher
 
 class EtcFileWatcher(NewFileWatcher):
-    def __init__(self, *args, procdir='.', astrometry_config_file=None, **kwargs):
+    def __init__(self, *args, procdir='.', astrometry_config_file=None,
+                 remote_client=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.procdir = procdir
         self.astrometry_config_file = astrometry_config_file
+        self.remote_client = remote_client
         self.expnum = None
         self.last_roi = None
         self.etc = None
@@ -2422,6 +2434,7 @@ class EtcFileWatcher(NewFileWatcher):
             # Starting a new exposure!
             etc = IbisEtc()
             etc.configure(procdir, astrometry_config_file)
+            etc.remote_client = self.remote_client
             #etc.set_plot_base('acq-%i' % expnum)
 
             # kwa = self.fake_metadata.get(expnum, {})
@@ -2511,11 +2524,15 @@ if __name__ == '__main__':
     #                              airmass=m.airmass)
     #print('Grabbed metadata for', len(metadata), 'exposures from copilot db')
 
+    from RemoteClient import RemoteClient
+    rc = RemoteClient()
+
     if not os.path.exists(procdir):
         os.makedirs(procdir)
     etc = EtcFileWatcher(watchdir,
                          procdir=procdir,
-                         astrometry_config_file=astrometry_config_file)
+                         astrometry_config_file=astrometry_config_file,
+                         remote_client=rc)
     etc.sleeptime = 1.
     # FAKE
     #etc.fake_metadata = metadata
