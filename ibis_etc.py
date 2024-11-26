@@ -775,32 +775,24 @@ class IbisEtc(object):
         skybr += DECamGuiderMeasurer.SKY_BRIGHTNESS_CORRECTION
         skybr = np.mean(skybr)
 
-        # cumulative transparency
-        #itrs = []
-        #trs = []
-        # for chip in self.chipnames:
-        #     dflux = np.diff([params[TRACTOR_PARAM_FLUX]
-        #                      for params in self.tractor_fits[chip]])
-        #     flux0 = self.tractor_fits[chip][0][TRACTOR_PARAM_FLUX]
-        #     tr = np.append(1., (dflux / flux0)) * self.transparency
-        #     itrs.append(tr[-1])
-        #     dsci = np.append(self.sci_times[0], np.diff(self.sci_times))
-        #     tr = np.cumsum(tr * dsci) / self.sci_times
-        #     trs.append(tr[-1])
-        # trans = np.mean(trs)
-
-        itrs = {}
+        # transparency
         trs = []
         for chip in self.starchips:
-            flux2 = self.tractor_fits[chip][-1][TRACTOR_PARAM_FLUX]
+            # instantaneous
+            flux_now = self.tractor_fits[chip][-1][TRACTOR_PARAM_FLUX]
             if len(self.dt_walls) > 1:
-                flux1 = self.tractor_fits[chip][-2][TRACTOR_PARAM_FLUX]
-                tr = (flux2 - flux1) / self.roiflux[chip]
+                flux_prev = self.tractor_fits[chip][-2][TRACTOR_PARAM_FLUX]
+                # the flux is cumulative, so now - prev is the increment
+                tr = (flux_now - flux_prev) / self.roiflux[chip]
             else:
+                # we just set roiflux = flux_now above
                 tr = 1.
-            
             self.inst_transparency[chip].append(tr * self.transparency)
-            tr = flux2 / len(self.dt_walls) / self.roiflux[chip]
+
+            # cumulative:
+            # assume the time chunks are equal and we're just expecting N
+            # increments x the first-frame flux
+            tr = flux_now / len(self.dt_walls) / self.roiflux[chip]
             trs.append(tr * self.transparency)
         trans = np.mean(trs)
 
