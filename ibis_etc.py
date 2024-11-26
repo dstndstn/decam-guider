@@ -94,10 +94,6 @@ class IbisEtc(object):
         self.flux0 = None
         self.acc_strips = None
         self.acc_biases = None
-        #self.sci_acc_strips = None
-        #self.sci_acc_strip_skies = None
-        #self.all_sci_acc_strips = None
-        #self.all_acc_biases = None
         self.strip_skies = None
         self.strip_sig1s = None
         self.acc_strip_skies = None
@@ -458,10 +454,6 @@ class IbisEtc(object):
             self.roiflux = {}
             self.acc_strips = {}
             self.acc_biases = {}
-            # self.sci_acc_strips = {}
-            # self.sci_acc_strip_skies  = dict((chip,[]) for chip in self.chipnames)
-            # self.all_sci_acc_strips = {}
-            # self.all_acc_biases = {}
             self.strip_skies_2  = dict((chip,[]) for chip in self.chipnames)
             self.strip_skies_2.update((chip+'_L',[]) for chip in self.chipnames)
             self.strip_skies_2.update((chip+'_R',[]) for chip in self.chipnames)
@@ -537,10 +529,6 @@ class IbisEtc(object):
                 self.acc_strips[chip] = img.copy()
                 self.acc_biases[chip+'_L'] = (biasimgs[ichip*2  ].copy() - bl)
                 self.acc_biases[chip+'_R'] = (biasimgs[ichip*2+1].copy() - br)
-                # self.sci_acc_strips[chip] = dt_sci * img.copy() / dt_wall
-                # self.all_sci_acc_strips[chip] = [self.sci_acc_strips[chip].copy()]
-                # self.all_acc_biases[chip+'_L'] = [self.acc_biases[chip+'_L'].copy()]
-                # self.all_acc_biases[chip+'_R'] = [self.acc_biases[chip+'_R'].copy()]
                 self.acc_bias_medians[chip+'_L'] = []
                 self.acc_bias_medians[chip+'_R'] = []
                 self.acc_strip_skies[chip+'_L'] = []
@@ -553,10 +541,6 @@ class IbisEtc(object):
                 self.acc_strips[chip] += img.copy()
                 self.acc_biases[chip+'_L'] += (biasimgs[ichip*2  ].copy() - bl)
                 self.acc_biases[chip+'_R'] += (biasimgs[ichip*2+1].copy() - br)
-                # self.sci_acc_strips[chip] += (dt_sci * img.copy() / dt_wall)
-                # self.all_sci_acc_strips[chip].append(self.sci_acc_strips[chip].copy())
-                # self.all_acc_biases[chip+'_L'].append(self.acc_biases[chip+'_L'].copy())
-                # self.all_acc_biases[chip+'_R'].append(self.acc_biases[chip+'_R'].copy())
 
             acc = self.acc_strips[chip]
             self.acc_strip_sig1s[chip].append(blanton_sky(acc, step=3))
@@ -576,16 +560,10 @@ class IbisEtc(object):
 
             bias_l_rowmed = np.median(acc_bl, axis=1)
             bias_r_rowmed = np.median(acc_br, axis=1)
-            #print('acc_l data:', acc_l.shape, 'acc_bl:', acc_bl.shape, 'bias-l-rowmed:', bias_l_rowmed.shape)
-
-            self.acc_rowwise_skies[chip+'_L'].append(np.median(acc_l - bias_l_rowmed[:,np.newaxis]))
-            self.acc_rowwise_skies[chip+'_R'].append(np.median(acc_r - bias_r_rowmed[:,np.newaxis]))
-            
-            #self.sci_acc_strip_skies[chip].append(np.median(self.sci_acc_strips[chip]))
-            #print(chip, 'subimage median:', np.median(subimg))
-            #print(chip, 'acc  sky rate:', self.sci_acc_strip_skies[chip][-1] / self.sci_times[-1])
-            #print(chip, 'sci acc sky: %.2f' % self.sci_acc_strip_skies[chip][-1])
-            #print(chip, 'inst sky rate: %.2f counts/sec/pixel' % (self.strip_skies[chip][-1] / dt_wall))
+            self.acc_rowwise_skies[chip+'_L'].append(
+                np.median(acc_l - bias_l_rowmed[:,np.newaxis]))
+            self.acc_rowwise_skies[chip+'_R'].append(
+                np.median(acc_r - bias_r_rowmed[:,np.newaxis]))
 
         if self.debug:
             plt.clf()
@@ -607,10 +585,6 @@ class IbisEtc(object):
                 plt.ylabel(chip)
             plt.suptitle('ROI images and Accumulated')
             self.ps.savefig()
-
-        # for chip in chips:
-        #     print(chip, 'cumulative sky rate: %.2f counts/sec/pixel' %
-        #           (self.acc_strip_skies[chip][-1] / sum(self.dt_walls)))
 
         if self.debug and False:
             plt.clf()
@@ -836,13 +810,6 @@ class IbisEtc(object):
 
         # Instantaneous measurements
         for chip in self.chipnames:
-            # if len(self.sci_times) > 1:
-            #     iskyrate = ((self.sci_acc_strip_skies[chip][-1] - self.sci_acc_strip_skies[chip][-2]) /
-            #                 (self.sci_times[-1] - self.sci_times[-2]))
-            #     print('Count difference:', (self.sci_acc_strip_skies[chip][-1] - self.sci_acc_strip_skies[chip][-2]))
-            # else:
-            #     iskyrate = self.sci_acc_strip_skies[chip][-1] / self.sci_times[-1]
-
             if len(self.dt_walls) > 1:
                 iskyrate = ((self.acc_strip_skies[chip][-1] - self.acc_strip_skies[chip][-2]) /
                             dt_wall)
@@ -892,18 +859,11 @@ class IbisEtc(object):
                 plt.subplot(2,4, hdu)
                 mn = np.percentile(np.median(bias, axis=1), 5)
                 plt.imshow(bias, interpolation='nearest', origin='lower', vmin=mn, vmax=mn+250)
-                # The bottom ~10 rows are much brighter; but use 25 to match data
-                #bias = bias[25:, :]
-                #bias = np.median(bias)
                 datasec1 = hdr1['DATASEC'].strip('[]').split(',')
                 assert(len(datasec1) == 2)
                 (x0,x1),(y0,y1) = [[int(x) for x in vi] for vi in [w.split(':') for w in datasec1]]
                 data = im1[y0-1:y1, x0-1:x1]
                 dataimgs.append(data)
-                #print('Data shape', data.shape)
-                # The bottom ~25 (!) rows are significantly larger.
-                #data = data[25:, :]
-                #sky += np.median(data) - bias
         plt.suptitle('Bias')
         self.ps.savefig()
 
