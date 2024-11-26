@@ -2461,6 +2461,12 @@ class EtcFileWatcher(NewFileWatcher):
             if self.etc is not None:
                 pfn = os.path.join(self.procdir)
             print('Starting a new exposure!')
+
+            roi_fn = os.path.join(dirnm, 'roi_settings_%08i.dat' % expnum)
+            print('Looking for ROI settings file:', roi_fn)
+            self.roi_settings = json.load(open(roi_fn, 'r'))
+            print('Got settings:', self.roi_settings)
+
             # Starting a new exposure!
             etc = IbisEtc()
             etc.configure(procdir, astrometry_config_file)
@@ -2468,7 +2474,8 @@ class EtcFileWatcher(NewFileWatcher):
 
             # kwa = self.fake_metadata.get(expnum, {})
             # HACK - XMM
-            kwa = dict(radec_boresight = (36.5, -4.5), airmass=1.0)
+            #kwa = dict(radec_boresight = (36.5, -4.5), airmass=1.0)
+            kwa = self.roi_settings
 
             from astrometry.util.starutil import ra2hmsstring, dec2dmsstring
             phdr = fitsio.read_header(path)
@@ -2481,7 +2488,6 @@ class EtcFileWatcher(NewFileWatcher):
             self.etc = etc
             self.expnum = expnum
             self.last_roi = 0
-            self.roi_settings = None
             # clear the out-of-order list of previous exposures
             self.out_of_order = [(e,r,p) for (e,r,p) in self.out_of_order if e == self.expnum]
             
@@ -2490,10 +2496,6 @@ class EtcFileWatcher(NewFileWatcher):
                 print('The last ROI frame we saw was', self.last_roi, 'but this one is', roinum)
                 self.out_of_order.append((expnum, roinum, path))
                 return False
-            if self.roi_settings is None:
-                roi_fn = os.path.join(dirnm, 'roi_settings_%08i.dat' % expnum)
-                print('Looking for ROI settings file:', roi_fn)
-                self.roi_settings = json.load(open(roi_fn, 'r'))
             self.etc.process_roi_image(self.roi_settings, roinum, path)
             self.last_roi = roinum
         else:
