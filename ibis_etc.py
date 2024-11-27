@@ -2476,13 +2476,13 @@ class EtcFileWatcher(NewFileWatcher):
             if self.expnum is None:
                 # Add the previous ones to the queue, if they exist, and kick off the backlog
                 ooo = []
-                for roi in range(roinum):
+                for roi in range(roinum+1):
                     fn = os.path.join(dirnm, 'DECam_guider_%i_%08i.fits.gz' % (expnum, roi))
                     if os.path.exists(fn):
                         ooo.append((expnum, roi, fn))
                 if len(ooo):
+                    _,_,firstfn = ooo.pop(0)
                     self.out_of_order.extend(ooo)
-                    _,_,firstfn = ooo[0]
                     return self.process_file(firstfn)
             self.out_of_order.append((expnum, roinum, path))
             return True
@@ -2517,7 +2517,8 @@ if __name__ == '__main__':
     procdir = '/tmp/etc/'
     astrometry_config_file='/data/declsp/astrometry-index-5200/cfg'
     watchdir = '/home3/guider_nfs/ETC/'
-
+    #watchdir = '/tmp/watch'
+    
     #procdir = 'data-processed2'
     #astrometry_config_file = os.path.expanduser('~/cosmo/work/users/dstn/index-5200/cfg')
     #watchdir = 'temp-data'
@@ -2534,8 +2535,5 @@ if __name__ == '__main__':
                          astrometry_config_file=astrometry_config_file,
                          remote_client=rc)
     etc.sleeptime = 1.
-    # FAKE
-    #etc.fake_metadata = metadata
-
     etc.run()
 
