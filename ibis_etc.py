@@ -2511,32 +2511,21 @@ class EtcFileWatcher(NewFileWatcher):
 
 
 if __name__ == '__main__':
-    batch_main()
-    sys.exit(0)
+    #batch_main()
+    #sys.exit(0)
 
     procdir = '/tmp/etc/'
     astrometry_config_file='/data/declsp/astrometry-index-5200/cfg'
     watchdir = '/home3/guider_nfs/ETC/'
 
-    
-    procdir = 'data-processed2'
-    astrometry_config_file = os.path.expanduser('~/cosmo/work/users/dstn/index-5200/cfg')
-    watchdir = '/tmp/guider-etc'
+    #procdir = 'data-processed2'
+    #astrometry_config_file = os.path.expanduser('~/cosmo/work/users/dstn/index-5200/cfg')
+    #watchdir = 'temp-data'
 
-    #watchdir = '/tmp/watch/'
-
-    ## FAKE
-    #metadata = {}
-    #from obsdb import django_setup
-    #django_setup(database_filename='decam.sqlite3')
-    #from obsdb.models import MeasuredCCD
-    #for m in MeasuredCCD.objects.all():
-    #    metadata[m.expnum] = dict(radec_boresight=(m.rabore, m.decbore),
-    #                              airmass=m.airmass)
-    #print('Grabbed metadata for', len(metadata), 'exposures from copilot db')
-
-    from RemoteClient import RemoteClient
-    rc = RemoteClient()
+    #from RemoteClient import RemoteClient
+    #rc = RemoteClient()
+    from RunRemoteClient import RunRemoteClient
+    rc = RunRemoteClient()
 
     if not os.path.exists(procdir):
         os.makedirs(procdir)
