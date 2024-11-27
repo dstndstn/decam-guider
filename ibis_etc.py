@@ -270,6 +270,9 @@ class IbisEtc(object):
         seeings = []
         for chip in self.wcschips:
             meas,R = self.chipmeas[chip]
+            if not 'refstars' in R:
+                print('No reference stars in chip', chip)
+                continue
             ref = R['refstars']
             apflux = R['apflux']
             exptime = R['exptime']
@@ -280,6 +283,9 @@ class IbisEtc(object):
                 zp0 = meas.zeropoint_for_exposure(self.filt, ext=meas.ext, exptime=exptime,
                                                   primhdr=R['primhdr'])
                 kx = nominal_cal.fiducial_exptime(self.filt).k_co
+        if len(dmags) == 0:
+            print('No matched stars found in any of the guide chips')
+            return
         dmags = np.hstack(dmags)
         seeings = np.hstack(seeings)
         seeing = np.median(seeings)
@@ -1293,6 +1299,8 @@ class DECamGuiderMeasurer(RawMeasurer):
 
         print('Ramp rate:', m / row_exptime, 'counts/sec')
 
+        print('Ramp offset: %.1f rows' % (b/m), ' -> %.3f sec' % (b/m * row_exptime))
+        
         # Remove sky ramp
         skymod += b + (m * x)[:, np.newaxis]
 
@@ -1611,6 +1619,9 @@ def run_expnum(args):
         if not os.path.exists(acq_fn):
             print('Does not exist:', acq_fn)
             continue
+        if not os.path.exists(roi_fn):
+            print('Does not exist:', roi_fn)
+            continue
         
         roi_settings = json.load(open(roi_fn, 'r'))
         S = compute_shift_all(roi_settings)
@@ -1655,8 +1666,9 @@ def run_expnum(args):
             f = open(statefn,'wb')
             pickle.dump(etc, f)
             f.close()
-        else:
-            etc = pickle.load(open(statefn, 'rb'))
+        #else:
+        #    etc = pickle.load(open(statefn, 'rb'))
+        return
 
         # Drop from the state pickle
         for chip in etc.chipnames:
@@ -2395,8 +2407,13 @@ def batch_main():
     #               1337014, 1337015, 1337016, 1337017]:
     
     # 2024-11-23
-    expnums = list(range(1342565, 1342587))
+    #expnums = list(range(1342565, 1342587))
+    # 2024-11-24
+    expnums = list(range(1342719, 1342792))
 
+    # All
+    #expnums = list(range(1301441, 1342797+1))
+    
     expnums = [e for e in expnums if e in metadata]
     
     mp = multiproc(40)
@@ -2536,8 +2553,8 @@ class EtcFileWatcher(NewFileWatcher):
 
 
 if __name__ == '__main__':
-    #batch_main()
-    #sys.exit(0)
+    batch_main()
+    sys.exit(0)
 
     procdir = '/tmp/etc/'
     astrometry_config_file='/data/declsp/astrometry-index-5200/cfg'
