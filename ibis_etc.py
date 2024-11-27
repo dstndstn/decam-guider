@@ -72,6 +72,7 @@ class IbisEtc(object):
 
     def clear_after_exposure(self):
         # Clear all the data associated with the current science exposure
+        self.stop_efftime = None
         self.sci_datetime = None
         self.acq_datetime = None
         self.acq_exptime = None
@@ -94,10 +95,6 @@ class IbisEtc(object):
         self.flux0 = None
         self.acc_strips = None
         self.acc_biases = None
-        #self.sci_acc_strips = None
-        #self.sci_acc_strip_skies = None
-        #self.all_sci_acc_strips = None
-        #self.all_acc_biases = None
         self.strip_skies = None
         self.strip_sig1s = None
         self.acc_strip_skies = None
@@ -138,6 +135,7 @@ class IbisEtc(object):
         self.acq_exptime = float(phdr['GEXPTIME'])
         self.expnum = int(phdr['EXPNUM'])
         self.filt = phdr['FILTER']
+        print('Expnum', self.expnum, 'Filter', self.filt)
 
         if fake_header is not None and 'RA' in fake_header and 'DEC' in fake_header:
             ra = hmsstring2ra(fake_header['RA'])
@@ -155,7 +153,9 @@ class IbisEtc(object):
             print('Warning: airmass not known')
             self.airmass = 1.
 
-        print('Expnum', self.expnum, 'Filter', self.filt)
+        if fake_header is not None and 'EFFTIME' in fake_header:
+            self.stop_efftime = float(fake_header['EFFTIME'])
+
         self.chipnames = chipnames
         self.imgs = dict(zip(chipnames, imgs))
 
@@ -206,7 +206,6 @@ class IbisEtc(object):
             else:
                 cmd = cmd + '--no-plots '
 
-            #if radec_boresight is not None:
             if self.radec is not None:
                 ra,dec = self.radec
                 cmd = cmd + '--ra %.4f --dec %.4f --radius 5 ' % (ra, dec)
@@ -232,11 +231,9 @@ class IbisEtc(object):
         if self.debug and any_img:
             plt.suptitle(acqfn)
             self.ps.savefig()
-        #state.update(procdir=procdir, goodchips=goodchips, wcsfns=wcsfns, imgfns=imgfns)
 
         self.chipmeas = {}
         for chip in chipnames:
-            #print()
             print('Measuring', chip)
             imgfn = imgfns[chip]
             if chip in self.wcschips:
@@ -464,10 +461,6 @@ class IbisEtc(object):
             self.roiflux = {}
             self.acc_strips = {}
             self.acc_biases = {}
-            # self.sci_acc_strips = {}
-            # self.sci_acc_strip_skies  = dict((chip,[]) for chip in self.chipnames)
-            # self.all_sci_acc_strips = {}
-            # self.all_acc_biases = {}
             self.strip_skies_2  = dict((chip,[]) for chip in self.chipnames)
             self.strip_skies_2.update((chip+'_L',[]) for chip in self.chipnames)
             self.strip_skies_2.update((chip+'_R',[]) for chip in self.chipnames)
@@ -543,10 +536,6 @@ class IbisEtc(object):
                 self.acc_strips[chip] = img.copy()
                 self.acc_biases[chip+'_L'] = (biasimgs[ichip*2  ].copy() - bl)
                 self.acc_biases[chip+'_R'] = (biasimgs[ichip*2+1].copy() - br)
-                # self.sci_acc_strips[chip] = dt_sci * img.copy() / dt_wall
-                # self.all_sci_acc_strips[chip] = [self.sci_acc_strips[chip].copy()]
-                # self.all_acc_biases[chip+'_L'] = [self.acc_biases[chip+'_L'].copy()]
-                # self.all_acc_biases[chip+'_R'] = [self.acc_biases[chip+'_R'].copy()]
                 self.acc_bias_medians[chip+'_L'] = []
                 self.acc_bias_medians[chip+'_R'] = []
                 self.acc_strip_skies[chip+'_L'] = []
@@ -559,10 +548,6 @@ class IbisEtc(object):
                 self.acc_strips[chip] += img.copy()
                 self.acc_biases[chip+'_L'] += (biasimgs[ichip*2  ].copy() - bl)
                 self.acc_biases[chip+'_R'] += (biasimgs[ichip*2+1].copy() - br)
-                # self.sci_acc_strips[chip] += (dt_sci * img.copy() / dt_wall)
-                # self.all_sci_acc_strips[chip].append(self.sci_acc_strips[chip].copy())
-                # self.all_acc_biases[chip+'_L'].append(self.acc_biases[chip+'_L'].copy())
-                # self.all_acc_biases[chip+'_R'].append(self.acc_biases[chip+'_R'].copy())
 
             acc = self.acc_strips[chip]
             self.acc_strip_sig1s[chip].append(blanton_sky(acc, step=3))
@@ -582,16 +567,10 @@ class IbisEtc(object):
 
             bias_l_rowmed = np.median(acc_bl, axis=1)
             bias_r_rowmed = np.median(acc_br, axis=1)
-            #print('acc_l data:', acc_l.shape, 'acc_bl:', acc_bl.shape, 'bias-l-rowmed:', bias_l_rowmed.shape)
-
-            self.acc_rowwise_skies[chip+'_L'].append(np.median(acc_l - bias_l_rowmed[:,np.newaxis]))
-            self.acc_rowwise_skies[chip+'_R'].append(np.median(acc_r - bias_r_rowmed[:,np.newaxis]))
-            
-            #self.sci_acc_strip_skies[chip].append(np.median(self.sci_acc_strips[chip]))
-            #print(chip, 'subimage median:', np.median(subimg))
-            #print(chip, 'acc  sky rate:', self.sci_acc_strip_skies[chip][-1] / self.sci_times[-1])
-            #print(chip, 'sci acc sky: %.2f' % self.sci_acc_strip_skies[chip][-1])
-            #print(chip, 'inst sky rate: %.2f counts/sec/pixel' % (self.strip_skies[chip][-1] / dt_wall))
+            self.acc_rowwise_skies[chip+'_L'].append(
+                np.median(acc_l - bias_l_rowmed[:,np.newaxis]))
+            self.acc_rowwise_skies[chip+'_R'].append(
+                np.median(acc_r - bias_r_rowmed[:,np.newaxis]))
 
         if self.debug:
             plt.clf()
@@ -613,10 +592,6 @@ class IbisEtc(object):
                 plt.ylabel(chip)
             plt.suptitle('ROI images and Accumulated')
             self.ps.savefig()
-
-        # for chip in chips:
-        #     print(chip, 'cumulative sky rate: %.2f counts/sec/pixel' %
-        #           (self.acc_strip_skies[chip][-1] / sum(self.dt_walls)))
 
         if self.debug and False:
             plt.clf()
@@ -807,32 +782,24 @@ class IbisEtc(object):
         skybr += DECamGuiderMeasurer.SKY_BRIGHTNESS_CORRECTION
         skybr = np.mean(skybr)
 
-        # cumulative transparency
-        #itrs = []
-        #trs = []
-        # for chip in self.chipnames:
-        #     dflux = np.diff([params[TRACTOR_PARAM_FLUX]
-        #                      for params in self.tractor_fits[chip]])
-        #     flux0 = self.tractor_fits[chip][0][TRACTOR_PARAM_FLUX]
-        #     tr = np.append(1., (dflux / flux0)) * self.transparency
-        #     itrs.append(tr[-1])
-        #     dsci = np.append(self.sci_times[0], np.diff(self.sci_times))
-        #     tr = np.cumsum(tr * dsci) / self.sci_times
-        #     trs.append(tr[-1])
-        # trans = np.mean(trs)
-
-        itrs = {}
+        # transparency
         trs = []
         for chip in self.starchips:
-            flux2 = self.tractor_fits[chip][-1][TRACTOR_PARAM_FLUX]
+            # instantaneous
+            flux_now = self.tractor_fits[chip][-1][TRACTOR_PARAM_FLUX]
             if len(self.dt_walls) > 1:
-                flux1 = self.tractor_fits[chip][-2][TRACTOR_PARAM_FLUX]
-                tr = (flux2 - flux1) / self.roiflux[chip]
+                flux_prev = self.tractor_fits[chip][-2][TRACTOR_PARAM_FLUX]
+                # the flux is cumulative, so now - prev is the increment
+                tr = (flux_now - flux_prev) / self.roiflux[chip]
             else:
+                # we just set roiflux = flux_now above
                 tr = 1.
-            
             self.inst_transparency[chip].append(tr * self.transparency)
-            tr = flux2 / len(self.dt_walls) / self.roiflux[chip]
+
+            # cumulative:
+            # assume the time chunks are equal and we're just expecting N
+            # increments x the first-frame flux
+            tr = flux_now / len(self.dt_walls) / self.roiflux[chip]
             trs.append(tr * self.transparency)
         trans = np.mean(trs)
 
@@ -842,13 +809,6 @@ class IbisEtc(object):
 
         # Instantaneous measurements
         for chip in self.chipnames:
-            # if len(self.sci_times) > 1:
-            #     iskyrate = ((self.sci_acc_strip_skies[chip][-1] - self.sci_acc_strip_skies[chip][-2]) /
-            #                 (self.sci_times[-1] - self.sci_times[-2]))
-            #     print('Count difference:', (self.sci_acc_strip_skies[chip][-1] - self.sci_acc_strip_skies[chip][-2]))
-            # else:
-            #     iskyrate = self.sci_acc_strip_skies[chip][-1] / self.sci_times[-1]
-
             if len(self.dt_walls) > 1:
                 iskyrate = ((self.acc_strip_skies[chip][-1] - self.acc_strip_skies[chip][-2]) /
                             dt_wall)
@@ -877,6 +837,15 @@ class IbisEtc(object):
         self.cumul_seeing.append(seeing)
         self.efftimes.append(efftime)
 
+        if self.stop_efftime is not None and efftime > self.stop_efftime:
+            print('Reached the target EFFTIME!')
+            self.stop_exposure()
+
+    def stop_exposure(self):
+        if self.remote_client is not None:
+            print('Stopping exposure!')
+            self.remote_client.stopexposure()
+
     def roi_debug_plots(self, F):
         nguide = 4
         biasimgs = []
@@ -898,18 +867,11 @@ class IbisEtc(object):
                 plt.subplot(2,4, hdu)
                 mn = np.percentile(np.median(bias, axis=1), 5)
                 plt.imshow(bias, interpolation='nearest', origin='lower', vmin=mn, vmax=mn+250)
-                # The bottom ~10 rows are much brighter; but use 25 to match data
-                #bias = bias[25:, :]
-                #bias = np.median(bias)
                 datasec1 = hdr1['DATASEC'].strip('[]').split(',')
                 assert(len(datasec1) == 2)
                 (x0,x1),(y0,y1) = [[int(x) for x in vi] for vi in [w.split(':') for w in datasec1]]
                 data = im1[y0-1:y1, x0-1:x1]
                 dataimgs.append(data)
-                #print('Data shape', data.shape)
-                # The bottom ~25 (!) rows are significantly larger.
-                #data = data[25:, :]
-                #sky += np.median(data) - bias
         plt.suptitle('Bias')
         self.ps.savefig()
 
@@ -2426,10 +2388,12 @@ def batch_main():
 from obsbot import NewFileWatcher
 
 class EtcFileWatcher(NewFileWatcher):
-    def __init__(self, *args, procdir='.', astrometry_config_file=None, **kwargs):
+    def __init__(self, *args, procdir='.', astrometry_config_file=None,
+                 remote_client=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.procdir = procdir
         self.astrometry_config_file = astrometry_config_file
+        self.remote_client = remote_client
         self.expnum = None
         self.last_roi = None
         self.etc = None
@@ -2478,14 +2442,22 @@ class EtcFileWatcher(NewFileWatcher):
             if self.etc is not None:
                 pfn = os.path.join(self.procdir)
             print('Starting a new exposure!')
+
+            roi_fn = os.path.join(dirnm, 'roi_settings_%08i.dat' % expnum)
+            print('Looking for ROI settings file:', roi_fn)
+            self.roi_settings = json.load(open(roi_fn, 'r'))
+            print('Got settings:', self.roi_settings)
+
             # Starting a new exposure!
             etc = IbisEtc()
             etc.configure(procdir, astrometry_config_file)
+            etc.remote_client = self.remote_client
             #etc.set_plot_base('acq-%i' % expnum)
 
             # kwa = self.fake_metadata.get(expnum, {})
             # HACK - XMM
-            kwa = dict(radec_boresight = (36.5, -4.5), airmass=1.0)
+            #kwa = dict(radec_boresight = (36.5, -4.5), airmass=1.0)
+            kwa = self.roi_settings
 
             from astrometry.util.starutil import ra2hmsstring, dec2dmsstring
             phdr = fitsio.read_header(path)
@@ -2498,7 +2470,6 @@ class EtcFileWatcher(NewFileWatcher):
             self.etc = etc
             self.expnum = expnum
             self.last_roi = 0
-            self.roi_settings = None
             # clear the out-of-order list of previous exposures
             self.out_of_order = [(e,r,p) for (e,r,p) in self.out_of_order if e == self.expnum]
             
@@ -2507,10 +2478,6 @@ class EtcFileWatcher(NewFileWatcher):
                 print('The last ROI frame we saw was', self.last_roi, 'but this one is', roinum)
                 self.out_of_order.append((expnum, roinum, path))
                 return False
-            if self.roi_settings is None:
-                roi_fn = os.path.join(dirnm, 'roi_settings_%08i.dat' % expnum)
-                print('Looking for ROI settings file:', roi_fn)
-                self.roi_settings = json.load(open(roi_fn, 'r'))
             self.etc.process_roi_image(self.roi_settings, roinum, path)
             self.last_roi = roinum
         else:
@@ -2574,11 +2541,15 @@ if __name__ == '__main__':
     #                              airmass=m.airmass)
     #print('Grabbed metadata for', len(metadata), 'exposures from copilot db')
 
+    from RemoteClient import RemoteClient
+    rc = RemoteClient()
+
     if not os.path.exists(procdir):
         os.makedirs(procdir)
     etc = EtcFileWatcher(watchdir,
                          procdir=procdir,
-                         astrometry_config_file=astrometry_config_file)
+                         astrometry_config_file=astrometry_config_file,
+                         remote_client=rc)
     etc.sleeptime = 1.
     # FAKE
     #etc.fake_metadata = metadata
