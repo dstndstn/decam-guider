@@ -31,8 +31,6 @@ import tractor.dense_optimizer
 
 import photutils
 
-from astrometry.util.starutil_numpy import hmsstring2ra, dmsstring2dec
-
 sfd = SFDMap()
 
 # Remove a V-shape pattern (MAGIC number)
@@ -118,13 +116,9 @@ class IbisEtc(object):
         self.first_roi_datetime = None
         self.rois = None
 
-    def process_guider_acq_image(self, acqfn,
-                                 fake_header=None):
+    def process_guider_acq_image(self, acqfn, roi_settings):
         '''
         * acqfn: string, filename of guider acquisition (first exposure) FITS file
-
-        * radec_boresight = (ra, dec) where ra,dec are floats, in decimal degrees.
-        * airmass: float
         '''
         self.clear_after_exposure()
         print('Reading', acqfn)
@@ -137,9 +131,9 @@ class IbisEtc(object):
         self.filt = phdr['FILTER']
         print('Expnum', self.expnum, 'Filter', self.filt)
 
-        if fake_header is not None and 'RA' in fake_header and 'DEC' in fake_header:
-            ra = hmsstring2ra(fake_header['RA'])
-            dec = dmsstring2dec(fake_header['DEC'])
+        if 'RA' in roi_settings and 'dec' in roi_settings and roi_settings['RA'] is not None:
+            ra = float(roi_settings['RA'])
+            dec = float(roi_settings['dec'])
             self.radec = (ra, dec)
             self.ebv = sfd.ebv(ra, dec)[0]
         else:
@@ -147,14 +141,18 @@ class IbisEtc(object):
             print('Warning: E(B-V) not known')
             self.ebv = 0.
 
-        if fake_header is not None and 'AIRMASS' in fake_header:
-            self.airmass = float(fake_header['AIRMASS'])
+        if 'airmass' in roi_settings:
+            self.airmass = float(roi_settings['airmass'])
         else:
             print('Warning: airmass not known')
             self.airmass = 1.
 
-        if fake_header is not None and 'EFFTIME' in fake_header:
-            self.stop_efftime = float(fake_header['EFFTIME'])
+        if 'efftime' in roi_settings:
+            # "None" in some (testing?) files
+            try:
+                self.stop_efftime = float(roi_settings['efftime'])
+            except:
+                print('Failed to parse "efftime": "%s"' % roi_settings['efftime'])
 
         self.chipnames = chipnames
         self.imgs = dict(zip(chipnames, imgs))
@@ -398,6 +396,9 @@ class IbisEtc(object):
                 x,y = roi[chip]
                 meas,R = self.chipmeas[chip]
                 # Stars detected in the acq. image
+                if not 'all_x' in R:
+                    print('Chip', chip, ': no stars')
+                    continue
                 trim_x0, trim_y0 = R['trim_x0'], R['trim_y0']
                 det_x = R['all_x'] + trim_x0
                 det_y = R['all_y'] + trim_y0
@@ -767,7 +768,7 @@ class IbisEtc(object):
                     self.starchips.append(chip)
                     self.roiflux[chip] = flux
                 else:
-                    print('Warning: chip', chip, 'got small tractor flux', flux, ' - ignoring')
+                    print('Warning: chip', chip, 'got small tractor flux', flux, '(or chip not in goodchips) - ignoring')
 
         if self.debug:
             self.ps.savefig()
@@ -777,6 +778,9 @@ class IbisEtc(object):
                            for chip in self.starchips]) * 2.35 * pixsc)
         skyrate = np.mean([self.acc_strip_skies[chip][-1]
                            for chip in self.chipnames]) / sum(self.dt_walls)
+        if self.nom_zp is None:
+            self.nom_zp = nominal_cal.zeropoint(self.filt)
+
         skybr = -2.5 * np.log10(skyrate /pixsc/pixsc) + self.nom_zp
         # HACK -- arbitrary sky correction to match copilot
         skybr += DECamGuiderMeasurer.SKY_BRIGHTNESS_CORRECTION
@@ -1603,34 +1607,29 @@ def run_expnum(args):
         # total_time = (shift_all + after_rows) * par_shift_time + roi_read + seq_delay_time + gexptime
         # print('Total time:       %8.3f ms' % (total_time * 1e3))
 
-        kwa = metadata[expnum]
-
         hdr = fitsio.read_header(acq_fn)
-        #if float(hdr['GEXPTIME']) != target_gexptime:
-        #    continue
         print('Filter', hdr['FILTER'])
 
         statefn = 'state-%i.pickle' % expnum
         if not os.path.exists(statefn):
 
-            from astrometry.util.starutil import ra2hmsstring, dec2dmsstring
-            phdr = fitsio.read_header(acq_fn)
-            fake_header = dict(RA=ra2hmsstring(kwa['radec_boresight'][0], separator=':'),
-                            DEC=dec2dmsstring(kwa['radec_boresight'][1], separator=':'),
-                            AIRMASS=kwa['airmass'],
-                            SCI_UT=phdr['UTSHUT'])
+            if ('RA' not in roi_settings) or (roi_settings['RA'] == 'null'):
+                kwa = metadata[expnum]
+                roi_settings['RA'] = kwa['ra']
+                roi_settings['dec'] = kwa['dec']
+                roi_settings['airmass'] = kwa['airmass']
 
             etc = IbisEtc()
             etc.configure(procdir, astrometry_config_file)
             etc.set_plot_base('acq-%i' % expnum)
-            etc.process_guider_acq_image(acq_fn, fake_header)
+            etc.process_guider_acq_image(acq_fn, roi_settings)
 
             f = open(statefn,'wb')
             pickle.dump(etc, f)
             f.close()
-        #else:
-        #    etc = pickle.load(open(statefn, 'rb'))
-        return
+        else:
+            etc = pickle.load(open(statefn, 'rb'))
+        #return
 
         # Drop from the state pickle
         for chip in etc.chipnames:
@@ -1640,14 +1639,11 @@ def run_expnum(args):
         state2fn = 'state2-%i.pickle' % expnum
         if not os.path.exists(state2fn):
 
-            #roi_settings = json.load(open(roi_fn, 'r'))
-
             for roi_num in range(1, 300):
             #for roi_num in [1,2]+list(range(170, 300)):
             #for roi_num in range(1, 10):
 
                 found = False
-
                 for roi_filename in [
                         ('~/ibis-data-transfer/guider-sequences/%i/DECam_guider_%i_%08i.fits.gz' %
                          (expnum, expnum, roi_num)),
@@ -2070,6 +2066,8 @@ def run_expnum(args):
         fid = nominal_cal.fiducial_exptime(etc.filt)
         ebv = etc.ebv
         exptimes = np.array(etc.sci_times)
+        if len(etc.starchips) == 0:
+            return
         transp = np.vstack([etc.inst_transparency[chip] for chip in etc.starchips]).mean(axis=0)
         skybr  = np.vstack([etc.inst_sky[chip] for chip in etc.chipnames]).mean(axis=0)
         seeing = np.vstack([etc.inst_seeing_2[chip] for chip in etc.starchips]).mean(axis=0)
@@ -2320,8 +2318,7 @@ def batch_main():
     django_setup(database_filename='decam.sqlite3')
     from obsdb.models import MeasuredCCD
     for m in MeasuredCCD.objects.all():
-        metadata[m.expnum] = dict(radec_boresight=(m.rabore, m.decbore),
-                                  airmass=m.airmass)
+        metadata[m.expnum] = dict(ra=m.rabore, dec=m.decbore, airmass=m.airmass)
     print('Grabbed metadata for', len(metadata), 'exposures from copilot db')
     print('Max expnum:', max(metadata.keys()))
     
@@ -2341,13 +2338,6 @@ def batch_main():
     
     # expnum = 1336362
     # # 1336360:
-    # #kwa = dict(
-    # #    radec_boresight=(351.5373, -1.539),
-    # #    airmass = 1.15)
-    # # 1336361: M438
-    # kwa = dict(
-    #     radec_boresight=(34.8773, -6.181),
-    #     airmass = 1.65)
 
     # 0.9-second GEXPTIME
     #target_gexptime = 0.9
@@ -2371,17 +2361,21 @@ def batch_main():
     # 2024-11-23
     #expnums = list(range(1342565, 1342587))
     # 2024-11-24
-    expnums = list(range(1342719, 1342792))
+    #expnums = list(range(1342719, 1342792))
+    # 2024-11-26
+    expnums = list(range(1343416, 1343480))
+    # 2024-11-26 WITH valid RA,Dec in roi_settings
+    #expnums = list(range(1343454, 1343480))
 
     # All
     #expnums = list(range(1301441, 1342797+1))
     
-    expnums = [e for e in expnums if e in metadata]
+    #expnums = [e for e in expnums if e in metadata]
     
     mp = multiproc(40)
     mp.map(run_expnum, [(e, metadata, procdir, astrometry_config_file) for e in expnums])
     #for e in expnums:
-    #    run_expnum(e)
+    #    run_expnum((e, metadata, procdir, astrometry_config_file))
     sys.exit(0)
     
 
@@ -2454,19 +2448,7 @@ class EtcFileWatcher(NewFileWatcher):
             etc.remote_client = self.remote_client
             #etc.set_plot_base('acq-%i' % expnum)
 
-            # kwa = self.fake_metadata.get(expnum, {})
-            # HACK - XMM
-            #kwa = dict(radec_boresight = (36.5, -4.5), airmass=1.0)
-            kwa = self.roi_settings
-
-            from astrometry.util.starutil import ra2hmsstring, dec2dmsstring
-            phdr = fitsio.read_header(path)
-            fake_header = dict(RA=ra2hmsstring(kwa['radec_boresight'][0], separator=':'),
-                            DEC=dec2dmsstring(kwa['radec_boresight'][1], separator=':'),
-                            AIRMASS=kwa['airmass'],
-                            SCI_UT=phdr['UTSHUT'])
-
-            etc.process_guider_acq_image(path, fake_header=fake_header)
+            etc.process_guider_acq_image(path, self.roi_settings)
             self.etc = etc
             self.expnum = expnum
             self.last_roi = 0
