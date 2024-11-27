@@ -47,6 +47,7 @@ class IbisEtc(object):
     def __init__(self):
         self.ps = None
         self.debug = False
+        self.remote_client = None
 
     def set_plot_base(self, base):
         if base is None:
@@ -412,8 +413,9 @@ class IbisEtc(object):
                 print('Matched a star detected in acq image, %.1f pix away' % d[j])
                 acqflux = R['all_apflux'][j]
                 print('Flux in acq image:', acqflux)
-                #print('Transmission:', self.transmission)
-                flux0[chip] = acqflux / self.transmission
+                print('Transmission:', self.transmission)
+                if self.transmission is not None:
+                    flux0[chip] = acqflux / self.transmission
             self.goodchips = goodchips
             self.acq_flux = flux0
 
@@ -798,13 +800,14 @@ class IbisEtc(object):
             else:
                 # we just set roiflux = flux_now above
                 tr = 1.
-            self.inst_transparency[chip].append(tr * self.transparency)
+            T = self.transparency or 0.0
+            self.inst_transparency[chip].append(tr * T)
 
             # cumulative:
             # assume the time chunks are equal and we're just expecting N
             # increments x the first-frame flux
             tr = flux_now / len(self.dt_walls) / self.roiflux[chip]
-            trs.append(tr * self.transparency)
+            trs.append(tr * T)
         trans = np.mean(trs)
 
         for chip in self.starchips:
@@ -829,12 +832,13 @@ class IbisEtc(object):
         expfactor = exposure_factor(fid, nominal_cal, self.airmass, self.ebv,
                                     seeing * SEEING_CORR, skybr, trans)
         efftime = self.sci_times[-1] / expfactor
-        print('Expnum', self.expnum, self.filt, 'frame', roi_num,
-              'sci exp time %.1f sec' % self.sci_times[-1],
-              'seeing %.2f arcsec,' % seeing,
-              'sky %.2f mag/arcsec^2,' % skybr,
-              'transparency %.1f %%' % (100.*trans),
-              'efftime %.1f sec' % efftime,
+        print('Expnum', self.expnum, 'frame %3i,' % roi_num,
+              '%4s,' % self.filt,
+              'exptime %5.1f sec,' % self.sci_times[-1],
+              'seeing %4.2f arcsec,' % seeing,
+              'sky %4.2f mag/arcsec^2,' % skybr,
+              'transparency %5.1f %%,' % (100.*trans),
+              'efftime %5.1f sec' % efftime,
               )
         self.cumul_sky.append(skybr)
         self.cumul_transparency.append(trans)
@@ -1636,6 +1640,9 @@ def run_expnum(args):
             meas,R = etc.chipmeas[chip]
             del R['image']
 
+        if not hasattr(etc, 'remote_client'):
+            etc.remote_client = None
+
         state2fn = 'state2-%i.pickle' % expnum
         if not os.path.exists(state2fn):
 
@@ -2363,7 +2370,9 @@ def batch_main():
     # 2024-11-24
     #expnums = list(range(1342719, 1342792))
     # 2024-11-26
-    expnums = list(range(1343416, 1343480))
+    #expnums = list(range(1343416, 1343480))
+    expnums = list(range(1343460, 1343480))
+
     # 2024-11-26 WITH valid RA,Dec in roi_settings
     #expnums = list(range(1343454, 1343480))
 
@@ -2374,8 +2383,8 @@ def batch_main():
     
     mp = multiproc(40)
     mp.map(run_expnum, [(e, metadata, procdir, astrometry_config_file) for e in expnums])
-    #for e in expnums:
-    #    run_expnum((e, metadata, procdir, astrometry_config_file))
+    # for e in expnums:
+    #     run_expnum((e, metadata, procdir, astrometry_config_file))
     sys.exit(0)
     
 
@@ -2509,8 +2518,11 @@ if __name__ == '__main__':
     astrometry_config_file='/data/declsp/astrometry-index-5200/cfg'
     watchdir = '/home3/guider_nfs/ETC/'
 
-    #procdir = '/tmp/etc/'
-    #astrometry_config_file = '~/data/INDEXES/5200/cfg'
+    
+    procdir = 'data-processed2'
+    astrometry_config_file = os.path.expanduser('~/cosmo/work/users/dstn/index-5200/cfg')
+    watchdir = '/tmp/guider-etc'
+
     #watchdir = '/tmp/watch/'
 
     ## FAKE
