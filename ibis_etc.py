@@ -1203,13 +1203,10 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None,
 
 class DECamGuiderMeasurer(RawMeasurer):
 
-    #ZEROPOINT_OFFSET = -2.5 * np.log10(2.24)
-    #SKY_BRIGHTNESS_CORRECTION = 0.
     ZEROPOINT_OFFSET = -2.5 * np.log10(3.23)
-    #SKY_BRIGHTNESS_CORRECTION = -0.984
     SKY_BRIGHTNESS_CORRECTION = -0.588
     SEEING_CORRECTION_FACTOR = 0.916
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.edge_trim = 50
@@ -1220,6 +1217,12 @@ class DECamGuiderMeasurer(RawMeasurer):
         self.det_thresh = 6.
         self.debug = False
         self.ps = None
+
+    def cut_reference_catalog(self, stars):
+        # Cut to stars with good g-i colors
+        stars.gicolor = stars.median[:,0] - stars.median[:,2]
+        keep = (stars.gicolor > 0.2) * (stars.gicolor < 2.7)
+        return keep
 
     def zeropoint_for_exposure(self, band, **kwa):
         zp0 = super().zeropoint_for_exposure(band, **kwa)
@@ -1286,9 +1289,7 @@ class DECamGuiderMeasurer(RawMeasurer):
         fake_exptime = self.get_exptime(self.primhdr)
         sky1 = fake_exptime * m / row_exptime
 
-        print('Ramp rate:', m / row_exptime, 'counts/sec')
-
-        print('Ramp offset: %.1f rows' % (b/m), ' -> %.3f sec' % (b/m * row_exptime))
+        print('Ramp rate: %.3f counts/sec, offset -> %.3f sec' % (m / row_exptime, b/m * row_exptime))
         
         # Remove sky ramp
         skymod += b + (m * x)[:, np.newaxis]
@@ -1821,7 +1822,7 @@ def run_expnum(args):
         # ps.savefig()
 
         dt_wall = np.mean(etc.dt_walls)
-        print('Average dt_wall:', dt_wall)
+        #print('Average dt_wall:', dt_wall)
 
         plt.clf()
         plt.suptitle('ROI sky estimates (counts/pix/sec)')
