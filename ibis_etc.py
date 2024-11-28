@@ -1218,6 +1218,9 @@ class DECamGuiderMeasurer(RawMeasurer):
         self.debug = False
         self.ps = None
 
+    def remove_sky_gradients(self, img):
+        pass
+
     def cut_reference_catalog(self, stars):
         # Cut to stars with good g-i colors
         stars.gicolor = stars.median[:,0] - stars.median[:,2]
