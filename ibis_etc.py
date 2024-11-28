@@ -338,7 +338,7 @@ class IbisEtc(object):
             gi = np.linspace(xl, xh, 100)
             fakemag = np.zeros((len(gi),3))
             fakemag[:,0] = gi
-            cc = meas.colorterm_ps1_to_observed(fakemag, self.filt)
+            cc = meas.colorterm_ref_to_observed(fakemag, self.filt)
             offset = np.median(np.hstack(diffs))
             plt.plot(gi, offset + cc, '-')
             plt.xlim(xl,xh)
@@ -1483,7 +1483,7 @@ class DECamGuiderMeasurer(RawMeasurer):
         print('Band', band)
         return ps1cat.ps1band[band]
 
-    def colorterm_ps1_to_observed(self, ps1stars, band):
+    def colorterm_ref_to_observed(self, ps1stars, band):
         return ps1_to_decam(ps1stars, band)
 
 # Measure_raw() returns:
