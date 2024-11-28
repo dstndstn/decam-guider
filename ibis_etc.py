@@ -10,7 +10,7 @@ import time
 
 import fitsio
 
-from astrometry.util.util import Sip
+from astrometry.util.util import Sip, Tan
 from astrometry.util.multiproc import multiproc
 
 from tractor.sfd import SFDMap
@@ -48,6 +48,7 @@ class IbisEtc(object):
         self.ps = None
         self.debug = False
         self.remote_client = None
+        self.astrometry_net = False
 
     def set_plot_base(self, base):
         if base is None:
@@ -168,16 +169,20 @@ class IbisEtc(object):
         for i,(chip,img,biaslr) in enumerate(zip(chipnames, imgs, biases)):
             imgfn = os.path.join(self.procdir, '%s-acq-%s.fits' % (self.expnum, chip))
             imgfns[chip] = imgfn
-            # HACK - speed up re-runs
-            wcsfn = os.path.join(self.procdir, '%s-acq-%s.wcs' % (self.expnum, chip))
-            wcsfns[chip] = wcsfn
-            if os.path.exists(wcsfn):
+
+            if self.astrometry_net:
+                # HACK - speed up re-runs
+                wcsfn = os.path.join(self.procdir, '%s-acq-%s.wcs' % (self.expnum, chip))
+                wcsfns[chip] = wcsfn
+                if os.path.exists(wcsfn):
+                    self.wcschips.append(chip)
+                    continue
+                axyfn = os.path.join(self.procdir, '%s-acq-%s.axy' % (self.expnum, chip))
+                if os.path.exists(axyfn):
+                    print('Exists:', axyfn, '-- assuming it will not solve')
+                    continue
+            else:
                 self.wcschips.append(chip)
-                continue
-            axyfn = os.path.join(self.procdir, '%s-acq-%s.axy' % (self.expnum, chip))
-            if os.path.exists(axyfn):
-                print('Exists:', axyfn, '-- assuming it will not solve')
-                continue
 
             # Save images for each guider chip -- build header
             hdr = fitsio.FITSHDR()
@@ -191,32 +196,30 @@ class IbisEtc(object):
             print('Wrote', imgfn)
             imgfns[chip] = imgfn
     
-            cmd = ('solve-field ' +
-                   '--config %s ' % self.astrometry_config_file +
-                   '--scale-low 0.25 --scale-high 0.27 --scale-units app ' +
-                   '--solved none --match none --corr none --new-fits none ' +
-                   '--no-tweak ' +
-                   '--continue ' +
-                   '--depth 30 ' +
-                   '--nsigma 6 ')
-    
-            if self.debug:
-                cmd = cmd + '--plot-scale 0.5 '
-            else:
-                cmd = cmd + '--no-plots '
+            if self.astrometry_net:
+                cmd = ('solve-field ' +
+                       '--config %s ' % self.astrometry_config_file +
+                       '--scale-low 0.25 --scale-high 0.27 --scale-units app ' +
+                       '--solved none --match none --corr none --new-fits none ' +
+                       '--no-tweak ' +
+                       '--continue ' +
+                       '--depth 30 ' +
+                       '--nsigma 6 ')
+                if self.debug:
+                    cmd = cmd + '--plot-scale 0.5 '
+                else:
+                    cmd = cmd + '--no-plots '
+                if self.radec is not None:
+                    ra,dec = self.radec
+                    cmd = cmd + '--ra %.4f --dec %.4f --radius 5 ' % (ra, dec)
+                cmd = cmd + imgfn
+                #cmd = cmd + ' -v --no-delete-temp'
+                print(cmd)
+                rtn = os.system(cmd)
+                print('rtn:', rtn)
+                if rtn:
+                    continue
 
-            if self.radec is not None:
-                ra,dec = self.radec
-                cmd = cmd + '--ra %.4f --dec %.4f --radius 5 ' % (ra, dec)
-
-            cmd = cmd + imgfn
-            #cmd = cmd + ' -v --no-delete-temp'
-            print(cmd)
-            rtn = os.system(cmd)
-            print('rtn:', rtn)
-            if rtn:
-                continue
-    
             if self.debug:
                 any_img = True
                 plt.subplot(2,2, i+1)
@@ -224,7 +227,7 @@ class IbisEtc(object):
                 plt.xticks([]); plt.yticks([])
                 plt.title(chip)
 
-            if os.path.exists(wcsfn):
+            if self.astrometry_net and os.path.exists(wcsfn):
                 self.wcschips.append(chip)
 
         if self.debug and any_img:
@@ -235,10 +238,25 @@ class IbisEtc(object):
         for chip in chipnames:
             print('Measuring', chip)
             imgfn = imgfns[chip]
-            if chip in self.wcschips:
-                wcs = Sip(wcsfns[chip])
-                p = ps1cat(ccdwcs=wcs)
-                stars = p.get_stars()
+            # if chip in self.wcschips:
+            #     wcs = Sip(wcsfns[chip])
+            #     p = ps1cat(ccdwcs=wcs)
+            #     stars = p.get_stars()
+            # else:
+            #     wcs = None
+
+            if self.radec is not None:
+                ra,dec = self.radec
+                # Dead-reckon WCS
+                chip_offsets = dict(
+                    GN1 = (-0.7038, -0.7401),
+                    GN2 = (-0.5486, -0.9044),
+                    GS1 = (-0.7019,  0.7393),
+                    GS2 = (-0.5464,  0.9033),)
+                dra,ddec = chip_offsets[chip]
+                print('Dead-reckoning WCS')
+                wcs = Tan(ra + dra, dec + ddec, 1024.5, 1024.5,
+                          0., 7.3e-5, -7.3e-5, 0., 2048.0, 2048.0)
             else:
                 wcs = None
 
@@ -247,11 +265,12 @@ class IbisEtc(object):
             meas.airmass = self.airmass
             meas.wcs = wcs
             # max astrometric shift, in arcsec (assume astrometry.net solution is pretty good)
-            meas.maxshift = 5.
+            #meas.maxshift = 5.
+            meas.maxshift = 30.
     
             kw = {}
             if self.debug:
-                #kw.update(ps=ps)
+                kw.update(ps=self.ps)
                 meas.debug = True
                 meas.ps = self.ps
                 pass
