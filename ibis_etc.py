@@ -86,10 +86,10 @@ class IbisEtc(object):
         self.imgs = None
         self.chipmeas = None
         self.transparency = None
-        self.transmission = None
+        #self.transmission = None
         self.nom_zp = None
         self.wcschips = None
-        self.goodchips = None
+        #self.goodchips = None
         # ROIs actually containg a star with flux>1000
         self.starchips = None
         self.flux0 = None
@@ -305,16 +305,16 @@ class IbisEtc(object):
         seeings = np.hstack(seeings)
         seeing = np.median(seeings)
         zpt = -np.median(dmags)
+        self.transparency = 10.**(-0.4 * (zp0 - zpt - kx * (self.airmass - 1.)))
         print()
         print('All chips:')
-        print('Zeropoint:    %.3f   (with %i stars)' % (zpt, len(dmags)))
-        print('Seeing:        %.2f arcsec' % seeing)
-        del dmags
-        self.transparency = 10.**(-0.4 * (zp0 - zpt - kx * (self.airmass - 1.)))
+        print('Zeropoint:     %.3f   (with %i stars)' % (zpt, len(dmags)))
         print('Nom Zeropoint: %.3f' % zp0)
         print('Transparency:  %.3f' % self.transparency)
-        self.transmission = 10.**(-0.4 * (zp0 - zpt))
-        print('Transmission:  %.3f' % self.transmission)
+        print('Seeing:        %.2f arcsec' % seeing)
+        del dmags
+        #self.transmission = 10.**(-0.4 * (zp0 - zpt))
+        #print('Transmission:  %.3f' % self.transmission)
         self.nom_zp = zp0
 
         for chip in self.wcschips:
@@ -334,7 +334,6 @@ class IbisEtc(object):
                 apmag = -2.5 * np.log10(apflux / exptime)
                 plt.plot(ref.ps1_mag_g - ref.ps1_mag_i,  apmag - ref.ps1_mag_g, '.', label=chip)
                 diffs.append(apmag - (ref.ps1_mag_g + R['colorterm']))
-    
             xl,xh = plt.xlim()
             gi = np.linspace(xl, xh, 100)
             fakemag = np.zeros((len(gi),3))
@@ -410,33 +409,33 @@ class IbisEtc(object):
         if roi_num == 2:
             first_time = True
             roi = roi_settings['roi']
-            goodchips = []
-            flux0 = {}
-            for i,chip in enumerate(self.chipnames):
-                x,y = roi[chip]
-                meas,R = self.chipmeas[chip]
-                # Stars detected in the acq. image
-                if not 'all_x' in R:
-                    print('Chip', chip, ': no stars')
-                    continue
-                trim_x0, trim_y0 = R['trim_x0'], R['trim_y0']
-                det_x = R['all_x'] + trim_x0
-                det_y = R['all_y'] + trim_y0
-                # Match to ROI
-                d = np.hypot(x - det_x, y - det_y)
-                j = np.argmin(d)
-                if d[j] > 5:
-                    print('Chip', chip, ': No close match found for ROI star at (x,y) = %.1f, %.1f' % (x,y))
-                    continue
-                goodchips.append(chip)
-                print('Matched a star detected in acq image, %.1f pix away' % d[j])
-                acqflux = R['all_apflux'][j]
-                print('Flux in acq image:', acqflux)
-                print('Transmission:', self.transmission)
-                if self.transmission is not None:
-                    flux0[chip] = acqflux / self.transmission
-            self.goodchips = goodchips
-            self.acq_flux = flux0
+            #goodchips = []
+            #flux0 = {}
+            #for i,chip in enumerate(self.chipnames):
+            #    x,y = roi[chip]
+            #    meas,R = self.chipmeas[chip]
+            #    # Stars detected in the acq. image
+            #    if not 'all_x' in R:
+            #        print('Chip', chip, ': no stars')
+            #        continue
+            #    trim_x0, trim_y0 = R['trim_x0'], R['trim_y0']
+            #    det_x = R['all_x'] + trim_x0
+            #    det_y = R['all_y'] + trim_y0
+            #    # Match to ROI
+            #    d = np.hypot(x - det_x, y - det_y)
+            #    j = np.argmin(d)
+            #    if d[j] > 5:
+            #        print('Chip', chip, ': No close match found for ROI star at (x,y) = %.1f, %.1f' % (x,y))
+            #        continue
+            #    goodchips.append(chip)
+            #    print('Matched a star detected in acq image, %.1f pix away' % d[j])
+            #    #acqflux = R['all_apflux'][j]
+            #    #print('Flux in acq image:', acqflux)
+            #    #print('Transmission:', self.transmission)
+            #    #if self.transmission is not None:
+            #    #    flux0[chip] = acqflux / self.transmission
+            #self.goodchips = goodchips
+            #self.acq_flux = flux0
 
             if self.debug:
                 plt.clf()
@@ -785,11 +784,12 @@ class IbisEtc(object):
             if first_time:
                 p = tr.getParams()
                 flux = p[TRACTOR_PARAM_FLUX]
-                if (flux > 1000) and chip in goodchips:
+                #if (flux > 1000) and chip in goodchips:
+                if flux > 1000:
                     self.starchips.append(chip)
                     self.roiflux[chip] = flux
                 else:
-                    print('Warning: chip', chip, 'got small tractor flux', flux, '(or chip not in goodchips) - ignoring')
+                    print('Warning: chip', chip, 'got small tractor flux %.1f - ignoring' % flux)
 
         if self.debug:
             self.ps.savefig()
