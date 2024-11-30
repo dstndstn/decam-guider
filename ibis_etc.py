@@ -851,13 +851,12 @@ class IbisEtc(object):
         expfactor = exposure_factor(fid, nominal_cal, self.airmass, self.ebv,
                                     seeing * SEEING_CORR, skybr, trans)
         efftime = self.sci_times[-1] / expfactor
-        print('Expnum', self.expnum, 'frame %3i,' % roi_num,
-              '%4s,' % self.filt,
-              'exptime %5.1f sec,' % self.sci_times[-1],
-              'seeing %4.2f arcsec,' % seeing,
-              'sky %4.2f mag/arcsec^2,' % skybr,
-              'transparency %5.1f %%,' % (100.*trans),
-              'efftime %5.1f sec' % efftime,
+        print('Exp', self.expnum, '/ %3i,' % roi_num,
+              'see %4.2f",' % seeing,
+              'sky %4.2f,' % skybr,
+              'trans %5.1f %%,' % (100.*trans),
+              'exp %5.1f,' % self.sci_times[-1],
+              'eff %5.1f sec' % efftime,
               )
         self.cumul_sky.append(skybr)
         self.cumul_transparency.append(trans)
