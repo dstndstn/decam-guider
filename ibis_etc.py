@@ -870,8 +870,12 @@ class IbisEtc(object):
 
     def stop_exposure(self):
         if self.remote_client is not None:
-            print('Stopping exposure!')
-            self.remote_client.stopexposure()
+            if self.stopped_exposure:
+                print("We already stopped this exposure, don't stop again")
+            else:
+                print('Stopping exposure!')
+                self.remote_client.stopexposure()
+                self.stopped_exposure = True
 
     def roi_debug_plots(self, F):
         nguide = 4
@@ -2424,7 +2428,7 @@ class EtcFileWatcher(NewFileWatcher):
         self.last_roi = None
         self.etc = None
         self.roi_settings = None
-
+        self.stopped_exposure = False
         self.out_of_order = []
 
     def get_newest_file(self, newfiles=None):
@@ -2484,6 +2488,7 @@ class EtcFileWatcher(NewFileWatcher):
             self.etc = etc
             self.expnum = expnum
             self.last_roi = 0
+            self.stopped_exposure = False
             # clear the out-of-order list of previous exposures
             self.out_of_order = [(e,r,p) for (e,r,p) in self.out_of_order if e == self.expnum]
             
