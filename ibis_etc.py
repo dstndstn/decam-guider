@@ -31,6 +31,7 @@ import tractor.dense_optimizer
 
 import photutils
 
+print('Reading SFD maps, complaints about END on the following lines are expected.')
 sfd = SFDMap()
 
 # Remove a V-shape pattern (MAGIC number)
