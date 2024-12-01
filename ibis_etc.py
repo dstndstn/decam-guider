@@ -2435,6 +2435,9 @@ class EtcFileWatcher(NewFileWatcher):
         self.roi_settings = None
         self.out_of_order = []
 
+    def filter_backlog(self, backlog):
+        return []
+
     # quieter
     def log(self, *args, **kwargs):
         self.debug(*args, **kwargs)
@@ -2460,6 +2463,26 @@ class EtcFileWatcher(NewFileWatcher):
                 latest = t
         return newestfile
 
+    def start_exposure(self, path, expnum):
+        dirnm = os.path.dirname(path)
+        roi_fn = os.path.join(dirnm, 'roi_settings_%08i.dat' % expnum)
+        print('Looking for ROI settings file:', roi_fn)
+        self.roi_settings = json.load(open(roi_fn, 'r'))
+        print('Got settings:', self.roi_settings)
+
+        # Starting a new exposure!
+        etc = IbisEtc()
+        etc.configure(procdir, astrometry_config_file)
+        etc.remote_client = self.remote_client
+        #etc.set_plot_base('acq-%i' % expnum)
+
+        etc.process_guider_acq_image(path, self.roi_settings)
+        self.etc = etc
+        self.expnum = expnum
+        self.last_roi = 0
+        # clear the out-of-order list of previous exposures
+        self.out_of_order = [(e,r,p) for (e,r,p) in self.out_of_order if e == self.expnum]
+
     def process_file(self, path):
         #print('process_file:', path)
         fn = os.path.basename(path)
@@ -2476,29 +2499,10 @@ class EtcFileWatcher(NewFileWatcher):
         expnum = int(words[0])
         roinum = int(words[1])
         #print('Expnum', expnum, 'ROI num', roinum)
-        if expnum != self.expnum and roinum == 0:
-            if self.etc is not None:
-                pfn = os.path.join(self.procdir)
+        if roinum == 0:
             print('Starting a new exposure!')
+            self.start_exposure(path, expnum)
 
-            roi_fn = os.path.join(dirnm, 'roi_settings_%08i.dat' % expnum)
-            print('Looking for ROI settings file:', roi_fn)
-            self.roi_settings = json.load(open(roi_fn, 'r'))
-            print('Got settings:', self.roi_settings)
-
-            # Starting a new exposure!
-            etc = IbisEtc()
-            etc.configure(procdir, astrometry_config_file)
-            etc.remote_client = self.remote_client
-            #etc.set_plot_base('acq-%i' % expnum)
-
-            etc.process_guider_acq_image(path, self.roi_settings)
-            self.etc = etc
-            self.expnum = expnum
-            self.last_roi = 0
-            # clear the out-of-order list of previous exposures
-            self.out_of_order = [(e,r,p) for (e,r,p) in self.out_of_order if e == self.expnum]
-            
         elif expnum == self.expnum:
             if roinum != self.last_roi + 1:
                 print('The last ROI frame we saw was', self.last_roi, 'but this one is', roinum)
@@ -2506,44 +2510,43 @@ class EtcFileWatcher(NewFileWatcher):
                 return False
             self.etc.process_roi_image(self.roi_settings, roinum, path)
             self.last_roi = roinum
+
+        elif self.expnum is None:
+            # We've started up partway through an exposure.  Try to catch up!
+            print('Starting partway through exposure %i.  Trying to catch up!' % expnum)
+            self.expnum = expnum
+            self.last_roi = -1
+            # Add the previous ROI frames to the out-of-order list, if they exist.
+            for roi in range(roinum+1):
+                fn = os.path.join(dirnm, 'DECam_guider_%i_%08i.fits.gz' % (expnum, roi))
+                if os.path.exists(fn):
+                    if roi == 0:
+                        # First frame -- process it to start this exposure!
+                        self.start_exposure(fn, expnum)
+                    else:
+                        self.out_of_order.append((expnum, roi, fn))
         else:
-            print('Unexpected: we were processing expnum', self.expnum, 'and new expnum is', expnum, 'and ROI frame number', roinum)
-            if self.expnum is None:
-                # Add the previous ones to the queue, if they exist, and kick off the backlog
-                ooo = []
-                for roi in range(roinum+1):
-                    fn = os.path.join(dirnm, 'DECam_guider_%i_%08i.fits.gz' % (expnum, roi))
-                    if os.path.exists(fn):
-                        ooo.append((expnum, roi, fn))
-                if len(ooo):
-                    _,_,firstfn = ooo.pop(0)
-                    self.out_of_order.extend(ooo)
-                    return self.process_file(firstfn)
+            print('Unexpected: we were processing expnum', self.expnum,
+                  'and new expnum is', expnum, 'and ROI frame number', roinum)
             self.out_of_order.append((expnum, roinum, path))
-            return True
-
-        # We successfully processed a frame... check if any of the files in the backlog
-        # match the next frame we expect!
-        if len(self.out_of_order):
-            #print('Finished processing expnum', self.expnum, 'ROI frame', self.last_roi)
-            print('Checking backlog...')
-            for i,(e,r,p) in enumerate(self.out_of_order):
-                if e == self.expnum:
-                    print('  exp', e, 'roi', r, '->', p)
-                if e == self.expnum and r == self.last_roi+1:
-                    print('Popping an exposure from the backlog')
-                    del self.out_of_order[i]
-                    return self.process_file(p)
-
         return True
 
-    def filter_backlog(self, backlog):
-        return []
-    #def filter_new_files(self, fns):
-    #    return fns
-    #def process_file(self, fn):
-    #    pass
+    def heartbeat(self):
+        # Check if any of the files in the out-of-order list match the next frame we expect!
+        if not len(self.out_of_order):
+            return
 
+        print('Checking backlog... on expnum %s, last ROI was %s' %
+              (self.expnum, self.last_roi))
+        for i,(e,r,p) in enumerate(self.out_of_order):
+            if e == self.expnum:
+                print('  exp', e, 'roi', r, '->', p)
+            if e == self.expnum and r == self.last_roi+1:
+                print('Popping an exposure from the backlog')
+                del self.out_of_order[i]
+                self.process_file(p)
+                self.run_loop_sleep = False
+                return
 
 if __name__ == '__main__':
     #batch_main()
