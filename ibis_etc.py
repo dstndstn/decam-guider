@@ -50,6 +50,7 @@ class IbisEtc(object):
         self.debug = False
         self.remote_client = None
         self.astrometry_net = False
+        self.stopped_exposure = False
 
     def set_plot_base(self, base):
         if base is None:
@@ -70,6 +71,8 @@ class IbisEtc(object):
         '''
         self.procdir = procdir
         self.astrometry_config_file = astrometry_config_file
+        if astrometry_config_file is not None:
+            self.astrometry_net = True
 
     def clear_after_exposure(self):
         # Clear all the data associated with the current science exposure
@@ -246,7 +249,7 @@ class IbisEtc(object):
             # else:
             #     wcs = None
 
-            if self.radec is not None:
+            if not self.astrometry_net and self.radec is not None:
                 ra,dec = self.radec
                 # Dead-reckon WCS
                 chip_offsets = dict(
@@ -258,6 +261,8 @@ class IbisEtc(object):
                 print('Dead-reckoning WCS')
                 wcs = Tan(ra + dra, dec + ddec, 1024.5, 1024.5,
                           0., 7.3e-5, -7.3e-5, 0., 2048.0, 2048.0)
+            elif self.astrometry_net and chip in self.wcschips:
+                wcs = Sip(wcsfns[chip])
             else:
                 wcs = None
 
@@ -2428,8 +2433,11 @@ class EtcFileWatcher(NewFileWatcher):
         self.last_roi = None
         self.etc = None
         self.roi_settings = None
-        self.stopped_exposure = False
         self.out_of_order = []
+
+    # quieter
+    def log(self, *args, **kwargs):
+        self.debug(*args, **kwargs)
 
     def get_newest_file(self, newfiles=None):
         if newfiles is None:
@@ -2488,7 +2496,6 @@ class EtcFileWatcher(NewFileWatcher):
             self.etc = etc
             self.expnum = expnum
             self.last_roi = 0
-            self.stopped_exposure = False
             # clear the out-of-order list of previous exposures
             self.out_of_order = [(e,r,p) for (e,r,p) in self.out_of_order if e == self.expnum]
             
@@ -2555,7 +2562,8 @@ if __name__ == '__main__':
     #rc = RemoteClient()
     from RunRemoteClient import RunRemoteClient
     rc = RunRemoteClient()
-
+    #rc = None
+    
     if not os.path.exists(procdir):
         os.makedirs(procdir)
     etc = EtcFileWatcher(watchdir,
