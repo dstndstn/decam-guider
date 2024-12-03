@@ -2484,6 +2484,9 @@ class EtcFileWatcher(NewFileWatcher):
         # clear the out-of-order list of previous exposures
         self.out_of_order = [(e,r,p) for (e,r,p) in self.out_of_order if e == self.expnum]
 
+        # HACK - testing
+        self.stop_efftime = 100.
+
     def process_file(self, path):
         #print('process_file:', path)
         fn = os.path.basename(path)
