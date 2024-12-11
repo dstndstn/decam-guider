@@ -25,6 +25,7 @@ from obsbot import exposure_factor, Neff
 
 import scipy.optimize
 from legacypipe.ps1cat import ps1_to_decam
+from legacypipe.gaiacat import GaiaCatalog
 
 import tractor
 import tractor.dense_optimizer
@@ -238,6 +239,15 @@ class IbisEtc(object):
             plt.suptitle(acqfn)
             self.ps.savefig()
 
+        flatmap = {}
+        flatfn = os.path.join('guideflats-v2', 'flat-%s.fits' % self.filt.lower())
+        if os.path.exists(flatfn):
+            print('Reading flats from', flatfn)
+            chipnames,flats,_,_,_,_ = assemble_full_frames(flatfn,
+                                               subtract_bias=False, fit_exp=False,
+                                               trim_first=False, trim_last=False)
+            flatmap.update(dict(list(zip(chipnames, flats))))
+
         self.chipmeas = {}
         for chip in chipnames:
             print('Measuring', chip)
@@ -269,6 +279,7 @@ class IbisEtc(object):
             ext = 0
             meas = DECamGuiderMeasurer(imgfn, ext, nominal_cal)
             meas.airmass = self.airmass
+            print('Airmass', self.airmass)
             meas.wcs = wcs
             # max astrometric shift, in arcsec (assume astrometry.net solution is pretty good)
             #meas.maxshift = 5.
@@ -276,11 +287,15 @@ class IbisEtc(object):
     
             kw = {}
             if self.debug:
-                kw.update(ps=self.ps)
-                meas.debug = True
-                meas.ps = self.ps
+                #kw.update(ps=self.ps)
+                #meas.debug = True
+                #meas.ps = self.ps
                 pass
             kw.update(get_image=True)
+
+            if True:
+                # Apply flat-field
+                kw.update(flat=flatmap[chip])
 
             R = meas.run(**kw)
             self.chipmeas[chip] = (meas, R)
@@ -326,8 +341,20 @@ class IbisEtc(object):
         for chip in self.wcschips:
             meas,R = self.chipmeas[chip]
             ref = R['refstars']
-            for i,b in enumerate('grizy'):
-                ref.set('ps1_mag_%s' % b, ref.median[:,i])
+            if meas.use_ps1:
+                for i,b in enumerate('grizy'):
+                    ref.set('ps1_mag_%s' % b, ref.median[:,i])
+                ref.color = ref.ps1_mag_g - ref.ps1_mag_i
+                meas.color_name = 'PS1 g-i'
+                ref.base_mag = ref.ps1_mag_g
+                meas.base_band_name = 'PS1 g'
+                meas.ref_survey_name = 'PS1'
+            else:
+                ref.color = ref.bprp_color
+                meas.color_name = 'Gaia BP-RP'
+                ref.base_mag = ref.phot_g_mean_mag
+                meas.base_band_name = 'Gaia G'
+                meas.ref_survey_name = 'Gaia'
 
         if self.debug:
             plt.clf()
@@ -338,13 +365,21 @@ class IbisEtc(object):
                 apflux = R['apflux']
                 exptime = R['exptime']
                 apmag = -2.5 * np.log10(apflux / exptime)
-                plt.plot(ref.ps1_mag_g - ref.ps1_mag_i,  apmag - ref.ps1_mag_g, '.', label=chip)
-                diffs.append(apmag - (ref.ps1_mag_g + R['colorterm']))
+                plt.plot(ref.color,  apmag - ref.base_mag, '.', label=chip)
+                diffs.append(apmag - (ref.base_mag + R['colorterm']))
             xl,xh = plt.xlim()
             gi = np.linspace(xl, xh, 100)
-            fakemag = np.zeros((len(gi),3))
-            fakemag[:,0] = gi
-            cc = meas.colorterm_ref_to_observed(fakemag, self.filt)
+
+            from astrometry.util.fits import fits_table
+            if meas.use_ps1:
+                fakestars = fits_table()
+                fakestars.median = np.zeros((len(gi),3))
+                fakestars.median[:,0] = gi
+            else:
+                fakestars = fits_table()
+                fakestars.bprp_color = gi
+            cc = meas.get_color_term(fakestars, self.filt)
+            #cc = meas.colorterm_ref_to_observed(fakemag, self.filt)
             offset = np.median(np.hstack(diffs))
             plt.plot(gi, offset + cc, '-')
             plt.xlim(xl,xh)
@@ -352,8 +387,8 @@ class IbisEtc(object):
             yl,yh = plt.ylim()
             plt.ylim(max(yl, m-1), min(yh, m+1))
             plt.legend()
-            plt.xlabel('PS1 g-i (mag)')
-            plt.ylabel('%s - g (mag)' % self.filt)
+            plt.xlabel('%s (mag)' % meas.color_name)
+            plt.ylabel('%s - %s (mag)' % (self.filt, meas.base_band_name))
             self.ps.savefig()
 
             plt.clf()
@@ -363,13 +398,13 @@ class IbisEtc(object):
                 apflux = R['apflux']
                 exptime = R['exptime']
                 apmag = -2.5 * np.log10(apflux / exptime)
-                plt.plot(ref.ps1_mag_g - ref.ps1_mag_i,  apmag - ref.mag, '.', label=chip)
+                plt.plot(ref.color,  apmag - ref.mag, '.', label=chip)
             yl,yh = plt.ylim()
             plt.ylim(max(yl, m-1), min(yh, m+1))
             plt.axhline(-zpt, color='k', linestyle='--')
             plt.legend()
-            plt.xlabel('PS1 g-i (mag)')
-            plt.ylabel('%s - ref (g+color term) (mag)' % self.filt)
+            plt.xlabel('%s (mag)' % meas.color_name)
+            plt.ylabel('%s - ref (%s+color term) (mag)' % (self.filt, meas.base_band_name))
             self.ps.savefig()
 
             plt.clf()
@@ -380,7 +415,12 @@ class IbisEtc(object):
                 apflux = R['apflux']
                 exptime = R['exptime']
                 apmag = -2.5 * np.log10(apflux / exptime)
-                plt.plot(ref.mag, apmag + zpt, '.', label=chip)
+                apflux_err = R['apflux_err_poisson']
+                sn = apflux / apflux_err
+                mag_err = np.abs(-2.5 / np.log(10.) / sn)
+                #plt.plot(ref.mag, apmag + zpt, '.', label=chip)
+                plt.errorbar(ref.mag, apmag + zpt, fmt='.', label=chip,
+                             yerr=mag_err)
                 rr.append(ref.mag)
             rr = np.hstack(rr)
             mn,mx = np.min(rr), np.max(rr)
@@ -388,8 +428,39 @@ class IbisEtc(object):
             plt.plot(lohi, lohi, 'k-', alpha=0.5)
             plt.axis(lohi*2)
             plt.legend()
-            plt.xlabel('PS1 ref (mag)')
+            plt.xlabel('%s ref (mag)' % meas.ref_survey_name)
             plt.ylabel('%s (mag)' % self.filt)
+            self.ps.savefig()
+
+            plt.clf()
+            rr = []
+            for chip in self.wcschips:
+                meas,R = self.chipmeas[chip]
+                ref = R['refstars']
+                apflux = R['apflux']
+                exptime = R['exptime']
+                #apflux_err = R['apflux_err']
+                apflux_err = R['apflux_err_poisson']
+                sn = apflux / apflux_err
+                mag_err = np.abs(-2.5 / np.log(10.) / sn)
+                apmag = -2.5 * np.log10(apflux / exptime)
+                #plt.plot(ref.mag, apmag + zpt - ref.mag, '.', label=chip)
+                plt.errorbar(ref.mag, apmag + zpt - ref.mag, fmt='.', label=chip,
+                             yerr=mag_err)
+                rr.append(ref.mag)
+            rr = np.hstack(rr)
+            mn,mx = np.min(rr), np.max(rr)
+            lohi = [mn-0.5, mx+0.5]
+            plt.xlim(*lohi)
+            plt.axhline(0, color='k', alpha=0.1)
+            plt.axhline(+0.1, color='k', linestyle='--', alpha=0.1)
+            plt.axhline(-0.1, color='k', linestyle='--', alpha=0.1)
+            plt.xlim(11, 17)
+            plt.ylim(-0.5, +0.5)
+            plt.legend(loc='upper left')
+            plt.xlabel('%s ref (mag)' % meas.ref_survey_name)
+            plt.ylabel('%s - %s ref (mag)' % (self.filt, meas.ref_survey_name))
+            plt.title('Expnum %i' % self.expnum)
             self.ps.savefig()
 
     def process_roi_image(self, roi_settings, roi_num, roi_filename,
@@ -952,7 +1023,7 @@ def blanton_sky(img, dist=5, step=10):
     return sig1
 
 def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None,
-                         subtract_bias=True):
+                         subtract_bias=True, trim_first=True, trim_last=True):
     F = fitsio.FITS(fn, 'r')
     phdr = F[0].read_header()
     chipnames = []
@@ -975,11 +1046,13 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None,
             datasec = hdr['DATASEC'].strip('[]').split(',')
             assert(len(datasec) == 2)
             (x0,x1),(y0,y1) = [[int(x) for x in vi] for vi in [w.split(':') for w in datasec]]
-            # Trim off last row -- it sometimes glitches!
-            y1 -= 1
-            # Also trim off the first row -- it's not glitchy in the same way, but does
-            # seem to have slightly different statistics than the remaining rows.
-            y0 += 1
+            if trim_last:
+                # Trim off last row -- it sometimes glitches!
+                y1 -= 1
+            if trim_first:
+                # Also trim off the first row -- it's not glitchy in the same way, but does
+                # seem to have slightly different statistics than the remaining rows.
+                y0 += 1
             maxrow = y1
             dataslice = slice(y0-1, y1), slice(x0-1, x1)
             data_x0, data_y0 = x0-1, y0-1
@@ -988,10 +1061,12 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None,
             biassec = hdr['BIASSEC'].strip('[]').split(',')
             assert(len(biassec) == 2)
             (x0,x1),(y0,y1) = [[int(x) for x in vi] for vi in [w.split(':') for w in biassec]]
-            # Trim off last row -- it sometimes glitches!
-            y1 -= 1
-            # And first row
-            y0 += 1
+            if trim_last:
+                # Trim off last row -- it sometimes glitches!
+                y1 -= 1
+            if trim_first:
+                # And first row
+                y0 += 1
             maxrow = max(maxrow, y1)
             biasslice = slice(y0-1, y1), slice(x0-1, x1)
             bias_x0, bias_y0 = x0-1, y0-1
@@ -1227,15 +1302,69 @@ class DECamGuiderMeasurer(RawMeasurer):
         self.det_thresh = 6.
         self.debug = False
         self.ps = None
+        # Reference catalog
+        self.use_ps1 = False
 
     def remove_sky_gradients(self, img):
         pass
 
+    def get_reference_stars(self, wcs, band):
+        if self.use_ps1:
+            return super().get_reference_stars(wcs, band)
+        # Gaia
+        gaia = GaiaCatalog().get_catalog_in_wcs(wcs)
+        assert(gaia is not None)
+        assert(len(gaia) > 0)
+        gaia = GaiaCatalog.catalog_nantozero(gaia)
+        assert(gaia is not None)
+        print(len(gaia), 'Gaia stars')
+        #gaia.about()
+        return gaia
+
     def cut_reference_catalog(self, stars):
-        # Cut to stars with good g-i colors
-        stars.gicolor = stars.median[:,0] - stars.median[:,2]
-        keep = (stars.gicolor > 0.2) * (stars.gicolor < 2.7)
+        if self.use_ps1:
+            # Cut to stars with good g-i colors
+            stars.gicolor = stars.median[:,0] - stars.median[:,2]
+            keep = (stars.gicolor > 0.2) * (stars.gicolor < 2.7)
+            return keep
+        keep = (stars.phot_bp_mean_mag != 0) * (stars.phot_rp_mean_mag != 0)
+        print(sum(keep), 'of', len(stars), 'Gaia stars have BP-RP color')
+        stars.bprp_color = stars.phot_bp_mean_mag - stars.phot_rp_mean_mag
+        stars.bprp_color *= keep
+        # Arjun's color terms are G + colorterm(BP-RP)
+        stars.mag = stars.phot_g_mean_mag
         return keep
+
+    def get_color_term(self, stars, band):
+        if self.use_ps1:
+            return super().get_color_term(stars, band)
+
+        polys = dict(
+            M411 = [-0.3464, 1.9527,-2.8314, 3.7463,-1.7361, 0.2621],
+            M438 = [-0.1806, 0.8371,-0.2328, 0.6813,-0.3504, 0.0527],
+            M464 = [-0.3263, 1.4027,-1.3349, 1.1068,-0.3669, 0.0424],
+            M490 = [-0.2287, 1.6287,-2.7733, 2.6698,-1.0101, 0.1330],
+            M517 = [-0.1937, 1.2866,-2.4744, 2.7437,-1.1472, 0.1623],
+            )
+        coeffs = polys[band]
+        color = stars.bprp_color
+        colorterm = np.zeros(len(color))
+        I = np.flatnonzero(stars.bprp_color != 0.0)
+        for power,coeff in enumerate(coeffs):
+            colorterm[I] += coeff * color[I]**power
+        return colorterm
+
+    def get_ps1_band(self, band):
+        print('Band', band)
+        return ps1cat.ps1band[band]
+
+    # def colorterm_ref_to_observed(self, mags, band):
+    #     if self.use_ps1:
+    #         print('Using PS1 color term')
+    #         return ps1_to_decam(mags, band)
+    #     print('Gaia color term')
+    #     cc = self.get_color_term(stars, band)
+    #     return cc
 
     def zeropoint_for_exposure(self, band, **kwa):
         zp0 = super().zeropoint_for_exposure(band, **kwa)
@@ -1489,12 +1618,6 @@ class DECamGuiderMeasurer(RawMeasurer):
     def get_wcs(self, hdr):
         return self.wcs
 
-    def get_ps1_band(self, band):
-        print('Band', band)
-        return ps1cat.ps1band[band]
-
-    def colorterm_ref_to_observed(self, ps1stars, band):
-        return ps1_to_decam(ps1stars, band)
 
 # Measure_raw() returns:
 # 'band': 'M411'
@@ -1649,6 +1772,7 @@ def run_expnum(args):
 
         statefn = 'state-%i.pickle' % expnum
         if not os.path.exists(statefn):
+        #if True:
 
             if ('RA' not in roi_settings) or (roi_settings['RA'] == 'null'):
                 kwa = metadata[expnum]
@@ -1659,6 +1783,7 @@ def run_expnum(args):
             etc = IbisEtc()
             etc.configure(procdir, astrometry_config_file)
             etc.set_plot_base('acq-%i' % expnum)
+            #etc.set_plot_base('acq-noflat-%i' % expnum)
             etc.process_guider_acq_image(acq_fn, roi_settings)
 
             f = open(statefn,'wb')
@@ -1666,7 +1791,7 @@ def run_expnum(args):
             f.close()
         else:
             etc = pickle.load(open(statefn, 'rb'))
-        #return
+        return
 
         # Drop from the state pickle
         for chip in etc.chipnames:
@@ -2404,22 +2529,26 @@ def batch_main():
     #expnums = list(range(1342719, 1342792))
     # 2024-11-26
     #expnums = list(range(1343416, 1343480))
-    expnums = list(range(1343460, 1343480))
+    #expnums = list(range(1343460, 1343480))
 
     # 2024-11-26 WITH valid RA,Dec in roi_settings
     #expnums = list(range(1343454, 1343480))
+
+    # Repeated pointings
+    expnums = list(range(1336350, 1336356+1))
 
     # All
     #expnums = list(range(1301441, 1342797+1))
     
     #expnums = [e for e in expnums if e in metadata]
     
-    mp = multiproc(40)
-    mp.map(run_expnum, [(e, metadata, procdir, astrometry_config_file) for e in expnums])
-    # for e in expnums:
-    #     run_expnum((e, metadata, procdir, astrometry_config_file))
+    #mp = multiproc(40)
+    #mp.map(run_expnum, [(e, metadata, procdir, astrometry_config_file) for e in expnums])
+    for e in expnums:
+        run_expnum((e, metadata, procdir, astrometry_config_file))
+
     sys.exit(0)
-    
+
 
 from obsbot import NewFileWatcher
 
@@ -2553,8 +2682,8 @@ class EtcFileWatcher(NewFileWatcher):
                 return
 
 if __name__ == '__main__':
-    #batch_main()
-    #sys.exit(0)
+    batch_main()
+    sys.exit(0)
 
     procdir = '/tmp/etc/'
     astrometry_config_file='/data/declsp/astrometry-index-5200/cfg'
