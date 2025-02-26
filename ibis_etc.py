@@ -1687,9 +1687,8 @@ def run_expnum(args):
                 if not found:
                     print('Does not exist:', roi_filename)
                     break
-                #etc.set_plot_base('roi-%i-%03i' % (expnum, roi_num))
-                etc.set_plot_base(None)
-                #etc.set_plot_base('roi-%03i' % roi_num)
+                etc.set_plot_base('roi-%i-%03i' % (expnum, roi_num))
+                #etc.set_plot_base(None)
                 etc.process_roi_image(roi_settings, roi_num, roi_filename)
 
             etc.shift_all = shift_all
@@ -2394,20 +2393,21 @@ def batch_main():
     #expnums = list(range(1342719, 1342792))
     # 2024-11-26
     #expnums = list(range(1343416, 1343480))
-    expnums = list(range(1343460, 1343480))
-
     # 2024-11-26 WITH valid RA,Dec in roi_settings
     #expnums = list(range(1343454, 1343480))
-
+    # 2024-11-27
+    #expnums = list(range(1343611, 1343665))
+    expnums = [1343612]
+    
     # All
     #expnums = list(range(1301441, 1342797+1))
     
     #expnums = [e for e in expnums if e in metadata]
     
-    mp = multiproc(40)
-    mp.map(run_expnum, [(e, metadata, procdir, astrometry_config_file) for e in expnums])
-    # for e in expnums:
-    #     run_expnum((e, metadata, procdir, astrometry_config_file))
+    #mp = multiproc(40)
+    #mp.map(run_expnum, [(e, metadata, procdir, astrometry_config_file) for e in expnums])
+    for e in expnums:
+        run_expnum((e, metadata, procdir, astrometry_config_file))
     sys.exit(0)
     
 
@@ -2534,8 +2534,8 @@ class EtcFileWatcher(NewFileWatcher):
 
 
 if __name__ == '__main__':
-    #batch_main()
-    #sys.exit(0)
+    batch_main()
+    sys.exit(0)
 
     procdir = '/tmp/etc/'
     astrometry_config_file='/data/declsp/astrometry-index-5200/cfg'
