@@ -209,6 +209,7 @@ class IbisEtc(object):
                        '--no-tweak ' +
                        '--continue ' +
                        '--depth 30 ' +
+                       '--crpix-center ' +
                        '--nsigma 6 ')
                 if self.debug:
                     cmd = cmd + '--plot-scale 0.5 '
@@ -294,7 +295,7 @@ class IbisEtc(object):
                 pass
             kw.update(get_image=True)
 
-            if True:
+            if chip in flatmap:
                 # Apply flat-field
                 kw.update(flat=flatmap[chip])
 
@@ -786,7 +787,8 @@ class IbisEtc(object):
             # Aperture photometry
             apxy = np.array([[roi_starx, roi_stary]])
             ap = []
-            aprad_pix = 15.
+            #aprad_pix = 15.
+            aprad_pix = 10.
             aper = photutils.aperture.CircularAperture(apxy, aprad_pix)
             p = photutils.aperture.aperture_photometry(roi_img - sky, aper)
             apflux = p.field('aperture_sum')
