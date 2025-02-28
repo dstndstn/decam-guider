@@ -49,9 +49,7 @@ class IbisEtc(object):
     def __init__(self):
         self.ps = None
         self.debug = False
-        self.remote_client = None
         self.astrometry_net = False
-        self.stopped_exposure = False
 
     def set_plot_base(self, base):
         if base is None:
@@ -77,7 +75,6 @@ class IbisEtc(object):
 
     def clear_after_exposure(self):
         # Clear all the data associated with the current science exposure
-        self.stop_efftime = None
         self.sci_datetime = None
         self.acq_datetime = None
         self.acq_exptime = None
@@ -153,13 +150,6 @@ class IbisEtc(object):
         else:
             print('Warning: airmass not known')
             self.airmass = 1.
-
-        if 'efftime' in roi_settings:
-            # "None" in some (testing?) files
-            try:
-                self.stop_efftime = float(roi_settings['efftime'])
-            except:
-                print('Failed to parse "efftime": "%s"' % roi_settings['efftime'])
 
         self.chipnames = chipnames
         self.imgs = dict(zip(chipnames, imgs))
@@ -960,20 +950,6 @@ class IbisEtc(object):
         self.cumul_transparency.append(trans)
         self.cumul_seeing.append(seeing)
         self.efftimes.append(efftime)
-
-        if self.stop_efftime is not None and efftime > self.stop_efftime:
-            print('Reached the target EFFTIME!')
-            self.stop_exposure()
-
-    def stop_exposure(self):
-        if self.remote_client is not None:
-            if self.stopped_exposure:
-                print("We already stopped this exposure, don't stop again")
-            else:
-                print('Stopping exposure!')
-                self.remote_client.stopexposure()
-                #self.remote_client.stoprequested()
-                self.stopped_exposure = True
 
     def roi_debug_plots(self, F):
         nguide = 4
@@ -1825,8 +1801,8 @@ def run_expnum(args):
 
         if not hasattr(etc, 'remote_client'):
             etc.remote_client = None
-        if not hasattr(etc, 'stop_efftime'):
-            etc.stop_efftime = 200.
+        #if not hasattr(etc, 'stop_efftime'):
+        #    etc.stop_efftime = 200.
 
         state2fn = 'state2-%i.pickle' % expnum
         if not os.path.exists(state2fn):
@@ -2590,6 +2566,8 @@ class EtcFileWatcher(NewFileWatcher):
         self.etc = None
         self.roi_settings = None
         self.out_of_order = []
+        self.stop_efftime = None
+        self.stopped_exposure = False
 
     def filter_backlog(self, backlog):
         return []
@@ -2629,8 +2607,16 @@ class EtcFileWatcher(NewFileWatcher):
         # Starting a new exposure!
         etc = IbisEtc()
         etc.configure(procdir, astrometry_config_file)
-        etc.remote_client = self.remote_client
         #etc.set_plot_base('acq-%i' % expnum)
+
+        if 'efftime' in self.roi_settings:
+            # "None" in some (testing?) files
+            try:
+                self.stop_efftime = float(self.roi_settings['efftime'])
+            except:
+                print('Failed to parse "efftime": "%s"' % self.roi_settings['efftime'])
+                self.stop_efftime = None
+        self.stopped_exposure = False
 
         etc.process_guider_acq_image(path, self.roi_settings)
         self.etc = etc
@@ -2670,6 +2656,12 @@ class EtcFileWatcher(NewFileWatcher):
             self.etc.process_roi_image(self.roi_settings, roinum, path)
             self.last_roi = roinum
 
+            if self.stop_efftime is not None and len(self.etc.efftimes) > 1:
+                efftime = self.etc.efftimes[-1]
+                if efftime > self.stop_efftime:
+                    print('Reached the target EFFTIME!')
+                    self.stop_exposure()
+
         elif self.expnum is None:
             # We've started up partway through an exposure.  Try to catch up!
             print('Starting partway through exposure %i.  Trying to catch up!' % expnum)
@@ -2689,6 +2681,16 @@ class EtcFileWatcher(NewFileWatcher):
                   'and new expnum is', expnum, 'and ROI frame number', roinum)
             self.out_of_order.append((expnum, roinum, path))
         return True
+
+    def stop_exposure(self):
+        if self.remote_client is not None:
+            if self.stopped_exposure:
+                print('We already stopped this exposure, don\'t stop again')
+            else:
+                print('Stopping exposure!')
+                self.remote_client.stopexposure()
+                #self.remote_client.stoprequested()
+                self.stopped_exposure = True
 
     def heartbeat(self):
         # Check if any of the files in the out-of-order list match the next frame we expect!
