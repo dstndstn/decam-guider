@@ -945,6 +945,44 @@ class IbisEtc(object):
             trs.append(tr * T)
         trans = np.mean(trs)
 
+        # transparency on ROI frames alone
+        roi_trs = []
+        S = compute_shift_all(roi_settings)
+        shift_all = S['shift_all']
+        after_rows = S['after_rows']
+        skip_rows = S['skip']
+        fid = nominal_cal.fiducial_exptime(self.filt)
+        zp0 = self.nom_zp - fid.k_co * (self.airmass - 1.)
+
+        for chip in self.starchips and chip in self.roi_star_mags:
+
+            ### from Untitled405.ipynb (!) notebook
+            t_off = 0.126
+            delay_time = 0.2
+            row_shift_time = 123.e-6
+
+            chip_offsets = dict(GS1 = 0.020,
+                                GS2 = 0.085,
+                                GN1 = -0.051,
+                                GN2 = 0.101,)
+
+            # "exptime3"
+            et = (t_off + self.roi_exptime + delay_time +
+                  row_shift_time * (skip_rows[chip] - after_rows))
+            mag = self.roi_star_mags[chip]
+            refflux = 10.**((zp0 - mag) / 2.5)
+            apflux = self.roi_apfluxes[chip][-1]
+            dmag = 2.5 * np.log10(apflux / (refflux * et))
+
+            print('chip', chip, 'dmag:', dmag)
+            # FIXME: +/-
+            dmag += chip_offsets[chip]
+            print('  after chip offset:', dmag)
+            tr = 10.**(dmag / 2.5)
+            roi_trs.append(tr)
+        if len(roi_trs):
+            print('Mean transparency from ROIs:', np.mean(roi_trs))
+
         for chip in self.starchips:
             isee = self.tractor_fits[chip][-1][TRACTOR_PARAM_PSFSIGMA] * 2.35 * pixsc
             self.inst_seeing[chip].append(isee)
@@ -2752,8 +2790,8 @@ class EtcFileWatcher(NewFileWatcher):
                 return
 
 if __name__ == '__main__':
-    batch_main()
-    sys.exit(0)
+    #batch_main()
+    #sys.exit(0)
 
     procdir = '/tmp/etc/'
     astrometry_config_file='/data/declsp/astrometry-index-5200/cfg'
