@@ -947,6 +947,7 @@ class IbisEtc(object):
 
         # transparency on ROI frames alone
         roi_trs = []
+        roi_inst_trs = []
         S = compute_shift_all(roi_settings)
         shift_all = S['shift_all']
         after_rows = S['after_rows']
@@ -954,7 +955,9 @@ class IbisEtc(object):
         fid = nominal_cal.fiducial_exptime(self.filt)
         zp0 = self.nom_zp - fid.k_co * (self.airmass - 1.)
 
-        for chip in self.starchips and chip in self.roi_star_mags:
+        for chip in self.starchips:
+            if not chip in self.roi_star_mags:
+                continue
 
             ### from Untitled405.ipynb (!) notebook
             t_off = 0.126
@@ -971,17 +974,27 @@ class IbisEtc(object):
                   row_shift_time * (skip_rows[chip] - after_rows))
             mag = self.roi_star_mags[chip]
             refflux = 10.**((zp0 - mag) / 2.5)
+
+            # instantaneous
             apflux = self.roi_apfluxes[chip][-1]
             dmag = 2.5 * np.log10(apflux / (refflux * et))
-
-            print('chip', chip, 'dmag:', dmag)
-            # FIXME: +/-
             dmag += chip_offsets[chip]
-            print('  after chip offset:', dmag)
+            tr = 10.**(dmag / 2.5)
+            roi_inst_trs.append(tr)
+
+            # cumulative (average flux)
+            apflux = np.sum(self.roi_apfluxes[chip]) / len(self.roi_apfluxes[chip])
+            dmag = 2.5 * np.log10(apflux / (refflux * et))
+            dmag += chip_offsets[chip]
             tr = 10.**(dmag / 2.5)
             roi_trs.append(tr)
+
         if len(roi_trs):
-            print('Mean transparency from ROIs:', np.mean(roi_trs))
+            print('Instantaneous transparency (from ROIs; %%):', ', '.join(['%.1f' % (tr*100) for tr in roi_inst_trs]))
+            print('Cumulative transparency (from ROIs; %%):', ', '.join(['%.1f' % (tr*100) for tr in roi_trs]))
+            roi_trans = np.mean(roi_trs)
+            print('Mean transparency (from ROIs; %%): %.1f' % (roi_trans*100))
+            trans = roi_trans
 
         for chip in self.starchips:
             isee = self.tractor_fits[chip][-1][TRACTOR_PARAM_PSFSIGMA] * 2.35 * pixsc
@@ -2798,15 +2811,17 @@ if __name__ == '__main__':
     watchdir = '/home3/guider_nfs/ETC/'
     #watchdir = '/tmp/watch'
     
-    #procdir = 'data-processed2'
-    #astrometry_config_file = os.path.expanduser('~/cosmo/work/users/dstn/index-5200/cfg')
-    #watchdir = 'temp-data'
-
     #from RemoteClient import RemoteClient
     #rc = RemoteClient()
     from RunRemoteClient import RunRemoteClient
     rc = RunRemoteClient()
-    #rc = None
+
+    # NERSC
+    if False:
+        procdir = 'data-processed2'
+        astrometry_config_file = os.path.expanduser('~/cosmo/work/users/dstn/index-5200/cfg')
+        watchdir = 'temp-data'
+        rc = None
     
     if not os.path.exists(procdir):
         os.makedirs(procdir)
