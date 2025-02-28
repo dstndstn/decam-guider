@@ -13,7 +13,6 @@ import fitsio
 from astrometry.util.util import Sip, Tan
 from astrometry.util.multiproc import multiproc
 
-from tractor.sfd import SFDMap
 #sys.path.insert(0, 'legacypipe/py')
 from legacypipe.ps1cat import ps1cat
 
@@ -32,8 +31,9 @@ import tractor.dense_optimizer
 
 import photutils
 
-print('Reading SFD maps, complaints about END on the following lines are expected.')
-sfd = SFDMap()
+#from tractor.sfd import SFDMap
+#print('Reading SFD maps, complaints about END on the following lines are expected.')
+#sfd = SFDMap()
 
 # Remove a V-shape pattern (MAGIC number)
 guider_horiz_slope = 0.00168831
@@ -81,7 +81,7 @@ class IbisEtc(object):
         self.roi_exptime = None
         self.expnum = None
         self.radec = None
-        self.ebv = None
+        #self.ebv = None
         self.filt = None
         self.airmass = None
         self.chipnames = None
@@ -139,11 +139,11 @@ class IbisEtc(object):
             ra = float(roi_settings['RA'])
             dec = float(roi_settings['dec'])
             self.radec = (ra, dec)
-            self.ebv = sfd.ebv(ra, dec)[0]
+            #self.ebv = sfd.ebv(ra, dec)[0]
         else:
             self.radec = None
-            print('Warning: E(B-V) not known')
-            self.ebv = 0.
+            #print('Warning: E(B-V) not known')
+            #self.ebv = 0.
 
         if 'airmass' in roi_settings:
             self.airmass = float(roi_settings['airmass'])
@@ -936,7 +936,11 @@ class IbisEtc(object):
 
         SEEING_CORR = DECamGuiderMeasurer.SEEING_CORRECTION_FACTOR
         fid = nominal_cal.fiducial_exptime(self.filt)
-        expfactor = exposure_factor(fid, nominal_cal, self.airmass, self.ebv,
+        ### Note -- for IBIS, we have folded the Galactic E(B-V) extinction into
+        ### the requested "efftime"s, so here we do *not* include the extinction factor.
+        #ebv = self.ebv
+        ebv = 0.
+        expfactor = exposure_factor(fid, nominal_cal, self.airmass, ebv,
                                     seeing * SEEING_CORR, skybr, trans)
         efftime = self.sci_times[-1] / expfactor
         print('Exp', self.expnum, '/ %3i,' % roi_num,
