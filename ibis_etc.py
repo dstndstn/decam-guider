@@ -2789,7 +2789,6 @@ class EtcFileWatcher(NewFileWatcher):
             self.out_of_order.append((expnum, roinum, path))
         return True
 
-    def try_process_file
     def stop_exposure(self):
         if self.remote_client is not None:
             if self.stopped_exposure:
