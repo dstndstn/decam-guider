@@ -2749,7 +2749,7 @@ class EtcFileWatcher(NewFileWatcher):
             self.etc.process_roi_image(self.roi_settings, roinum, path)
             self.last_roi = roinum
 
-            if self.stop_efftime is not None and len(self.etc.efftimes) > 1:
+            if self.stop_efftime is not None and self.etc.efftimes is not None and len(self.etc.efftimes) > 1:
                 efftime = self.etc.efftimes[-1]
                 if efftime > self.stop_efftime:
                     print('Reached the target EFFTIME!')
@@ -2802,7 +2802,7 @@ class EtcFileWatcher(NewFileWatcher):
                     del self.out_of_order[i]
                     self.run_loop_sleep = False
                 except (IOError,OSError) as e:
-                    self.log('Failed to process file: %s (%s)' % (p, str(e)))
+                    print('Failed to process file: %s (%s)' % (p, str(e)))
                 return
 
 if __name__ == '__main__':
