@@ -2797,9 +2797,12 @@ class EtcFileWatcher(NewFileWatcher):
                 print('  exp', e, 'roi', r, '->', p)
             if e == self.expnum and r == self.last_roi+1:
                 print('Popping an exposure from the backlog')
-                del self.out_of_order[i]
-                self.process_file(p)
-                self.run_loop_sleep = False
+                try:
+                    self.process_file(p)
+                    del self.out_of_order[i]
+                    self.run_loop_sleep = False
+                except (IOError,OSError) as e:
+                    self.log('Failed to process file: %s (%s)' % (fn, str(e)))
                 return
 
 if __name__ == '__main__':
