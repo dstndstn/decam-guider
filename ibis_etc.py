@@ -2802,7 +2802,7 @@ class EtcFileWatcher(NewFileWatcher):
                     del self.out_of_order[i]
                     self.run_loop_sleep = False
                 except (IOError,OSError) as e:
-                    self.log('Failed to process file: %s (%s)' % (fn, str(e)))
+                    self.log('Failed to process file: %s (%s)' % (p, str(e)))
                 return
 
 if __name__ == '__main__':
