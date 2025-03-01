@@ -119,6 +119,7 @@ class IbisEtc(object):
         self.efftimes = None
         self.first_roi_datetime = None
         self.rois = None
+        self.ran_first_roi = False
 
     def process_guider_acq_image(self, acqfn, roi_settings):
         '''
@@ -461,6 +462,9 @@ class IbisEtc(object):
             plt.clf()
             plt.subplots_adjust(hspace=0.2)
 
+        if self.rois is None:
+            self.rois = roi_settings['roi']
+            
         ### Question - should we just discard the first ROI frame?  It has different
         # exposure properties than the rest due to the readout timing patterns!
         # [0] is the full-frame image
@@ -471,11 +475,11 @@ class IbisEtc(object):
             phdr = fitsio.read_header(roi_filename)
             troi = datetime_from_header(phdr)
             self.first_roi_datetime = troi
-            self.rois = roi_settings['roi']
             return
 
         first_time = False
-        if roi_num == 2:
+        #if roi_num == 2:
+        if not self.ran_first_roi:
             first_time = True
             roi = roi_settings['roi']
             #goodchips = []
@@ -639,6 +643,8 @@ class IbisEtc(object):
         else:
             assert(self.roi_exptime == float(phdr['GEXPTIME']))
         troi = datetime_from_header(phdr)
+        if self.first_roi_datetime is None:
+            self.first_roi_datetime = troi
         self.roi_datetimes.append(troi)
         # How much total exposure time has the science exposure had at the end of
         # this guider frame?
@@ -806,7 +812,6 @@ class IbisEtc(object):
             tractor_chips = self.starchips
 
         for ichip,chip in enumerate(tractor_chips):
-            print('plot for', chip)
             if not first_time:
                 itr = self.inst_tractors[chip]
                 tim = itr.images[0]
@@ -1033,6 +1038,9 @@ class IbisEtc(object):
         self.cumul_transparency.append(trans)
         self.cumul_seeing.append(seeing)
         self.efftimes.append(efftime)
+
+        if first_time:
+            self.ran_first_roi = True
 
     def roi_debug_plots(self, F):
         nguide = 4
@@ -2746,7 +2754,13 @@ class EtcFileWatcher(NewFileWatcher):
                 print('The last ROI frame we saw was', self.last_roi, 'but this one is', roinum)
                 self.out_of_order.append((expnum, roinum, path))
                 return False
-            self.etc.process_roi_image(self.roi_settings, roinum, path)
+            # Catch exceptions and move on the next ROI frame!!
+            try:
+                self.etc.process_roi_image(self.roi_settings, roinum, path)
+            except Exception as e:
+                print('Error handling', path, ':', str(e))
+                import traceback
+                traceback.print_exc()
             self.last_roi = roinum
 
             if self.stop_efftime is not None and self.etc.efftimes is not None and len(self.etc.efftimes) > 1:
@@ -2775,6 +2789,7 @@ class EtcFileWatcher(NewFileWatcher):
             self.out_of_order.append((expnum, roinum, path))
         return True
 
+    def try_process_file
     def stop_exposure(self):
         if self.remote_client is not None:
             if self.stopped_exposure:
