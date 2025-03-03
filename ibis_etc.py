@@ -46,10 +46,11 @@ TRACTOR_PARAM_FLUX = 4
 
 class IbisEtc(object):
 
-    def __init__(self):
+    def __init__(self, assume_photometric=False):
         self.ps = None
         self.debug = False
         self.astrometry_net = False
+        self.assume_photometric = assume_photometric
 
     def set_plot_base(self, base):
         if base is None:
@@ -995,11 +996,15 @@ class IbisEtc(object):
             roi_trs.append(tr)
 
         if len(roi_trs):
-            print('Instantaneous transparency (from ROIs; %%):', ', '.join(['%.1f' % (tr*100) for tr in roi_inst_trs]))
-            print('Cumulative transparency (from ROIs; %%):', ', '.join(['%.1f' % (tr*100) for tr in roi_trs]))
+            print('Instantaneous transparency (from ROIs):', ', '.join(['%.1f' % (tr*100) for tr in roi_inst_trs]), '%')
+            print('Cumulative transparency (from ROIs):', ', '.join(['%.1f' % (tr*100) for tr in roi_trs]), '%')
             roi_trans = np.mean(roi_trs)
-            print('Mean transparency (from ROIs; %%): %.1f' % (roi_trans*100))
+            print('Mean transparency (from ROIs): %.1f %%' % (roi_trans*100))
             trans = roi_trans
+
+        if self.assume_photometric:
+            print('--photometric was set, assuming 100% transparency.')
+            trans = 1.0
 
         for chip in self.starchips:
             isee = self.tractor_fits[chip][-1][TRACTOR_PARAM_PSFSIGMA] * 2.35 * pixsc
@@ -1747,7 +1752,6 @@ class DECamGuiderMeasurer(RawMeasurer):
 # 'seeing': 1.5064726327517675
 
 def compute_shift_all(roi_settings):
-    print('roi_settings:', roi_settings)
     setup = roi_settings
 
     # Defaults from GCS.py
@@ -2665,11 +2669,12 @@ from obsbot import NewFileWatcher
 
 class EtcFileWatcher(NewFileWatcher):
     def __init__(self, *args, procdir='.', astrometry_config_file=None,
-                 remote_client=None, **kwargs):
+                 remote_client=None, assume_photometric=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.procdir = procdir
         self.astrometry_config_file = astrometry_config_file
         self.remote_client = remote_client
+        self.assume_photometric = assume_photometric
         self.expnum = None
         self.last_roi = None
         self.etc = None
@@ -2714,7 +2719,7 @@ class EtcFileWatcher(NewFileWatcher):
         print('Got settings:', self.roi_settings)
 
         # Starting a new exposure!
-        etc = IbisEtc()
+        etc = IbisEtc(assume_photometric=self.assume_photometric)
         etc.configure(procdir, astrometry_config_file)
         #etc.set_plot_base('acq-%i' % expnum)
 
@@ -2803,7 +2808,8 @@ class EtcFileWatcher(NewFileWatcher):
                 print('We already stopped this exposure, don\'t stop again')
             else:
                 print('Stopping exposure!')
-                self.remote_client.stopexposure()
+                #self.remote_client.stopexposure()
+                self.remote_client.stoprequested()
                 #self.remote_client.stoprequested()
                 self.stopped_exposure = True
 
@@ -2835,7 +2841,7 @@ if __name__ == '__main__':
     astrometry_config_file='/data/declsp/astrometry-index-5200/cfg'
     watchdir = '/home3/guider_nfs/ETC/'
     #watchdir = '/tmp/watch'
-    
+
     #from RemoteClient import RemoteClient
     #rc = RemoteClient()
     from RunRemoteClient import RunRemoteClient
@@ -2850,10 +2856,17 @@ if __name__ == '__main__':
     
     if not os.path.exists(procdir):
         os.makedirs(procdir)
+
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--photometric', action='store_true', help='Assume the night is photometric (transparency = 100%)')
+    opt = parser.parse_args()
+
     etc = EtcFileWatcher(watchdir,
                          procdir=procdir,
                          astrometry_config_file=astrometry_config_file,
-                         remote_client=rc)
+                         remote_client=rc,
+                         assume_photometric=opt.photometric)
     etc.sleeptime = 1.
     etc.run()
 
