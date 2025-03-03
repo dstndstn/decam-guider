@@ -2800,7 +2800,8 @@ class EtcFileWatcher(NewFileWatcher):
                 print('We already stopped this exposure, don\'t stop again')
             else:
                 print('Stopping exposure!')
-                self.remote_client.stopexposure()
+                #self.remote_client.stopexposure()
+                self.remote_client.stoprequested()
                 #self.remote_client.stoprequested()
                 self.stopped_exposure = True
 
