@@ -51,6 +51,7 @@ class IbisEtc(object):
         self.debug = False
         self.astrometry_net = False
         self.assume_photometric = assume_photometric
+        self.target_efftime = None
 
     def set_plot_base(self, base):
         if base is None:
@@ -995,22 +996,27 @@ class IbisEtc(object):
             tr = 10.**(dmag / 2.5)
             roi_trs.append(tr)
 
+        inst_str = []
+
         if len(roi_trs):
-            print('Instantaneous transparency (from ROIs):', ', '.join(['%.1f' % (tr*100) for tr in roi_inst_trs]), '%')
-            print('Cumulative transparency (from ROIs):', ', '.join(['%.1f' % (tr*100) for tr in roi_trs]), '%')
+            #print('Instantaneous transparency (from ROIs):', ', '.join(['%.1f' % (tr*100) for tr in roi_inst_trs]), '%')
+            #print('Cumulative transparency (from ROIs):', ', '.join(['%.1f' % (tr*100) for tr in roi_trs]), '%')
             roi_trans = np.mean(roi_trs)
-            print('Mean transparency (from ROIs): %.1f %%' % (roi_trans*100))
+            #print('Mean transparency (from ROIs): %.1f %%' % (roi_trans*100))
             trans = roi_trans
 
         if self.assume_photometric:
-            print('--photometric was set, assuming 100% transparency.')
+            #print('--photometric was set, assuming 100% transparency.')
             trans = 1.0
 
+        isees = []
         for chip in self.starchips:
             isee = self.tractor_fits[chip][-1][TRACTOR_PARAM_PSFSIGMA] * 2.35 * pixsc
             self.inst_seeing[chip].append(isee)
+            isees.append(isee)
 
         # Instantaneous measurements
+        iskies = []
         for chip in self.chipnames:
             if len(self.dt_walls) > 1:
                 iskyrate = ((self.acc_strip_skies[chip][-1] - self.acc_strip_skies[chip][-2]) /
@@ -1022,6 +1028,17 @@ class IbisEtc(object):
             # HACK -- arbitrary sky correction to match copilot
             iskybr += DECamGuiderMeasurer.SKY_BRIGHTNESS_CORRECTION
             self.inst_sky[chip].append(iskybr)
+            iskies.append(iskybr)
+
+        if len(isees):
+            inst_str.append('see %.2f"' % np.mean(isees))
+        if len(iskies):
+            inst_str.append('sky %.2f' % np.mean(iskies))
+        if len(roi_inst_trs):
+            inst_str.append('tr %.1f %%' % (np.mean(roi_inst_trs)*100))
+        inst = ''
+        if len(inst_str):
+            inst = '(inst: ' + ', '.join(inst_str) + ')'
 
         SEEING_CORR = DECamGuiderMeasurer.SEEING_CORRECTION_FACTOR
         fid = nominal_cal.fiducial_exptime(self.filt)
@@ -1032,12 +1049,17 @@ class IbisEtc(object):
         expfactor = exposure_factor(fid, nominal_cal, self.airmass, ebv,
                                     seeing * SEEING_CORR, skybr, trans)
         efftime = self.sci_times[-1] / expfactor
+        if self.target_efftime:
+            et_target = ' / %5.1f' % self.target_efftime
+        else:
+            et_target = ''
         print('Exp', self.expnum, '/ %3i,' % roi_num,
               'see %4.2f",' % seeing,
               'sky %4.2f,' % skybr,
               'trans %5.1f %%,' % (100.*trans),
               'exp %5.1f,' % self.sci_times[-1],
-              'eff %5.1f sec' % efftime,
+              'eff %5.1f%s sec' % (efftime, et_target),
+              inst
               )
         self.cumul_sky.append(skybr)
         self.cumul_transparency.append(trans)
@@ -2723,7 +2745,7 @@ class EtcFileWatcher(NewFileWatcher):
                 print('Failed to parse "efftime": "%s"' % self.roi_settings['efftime'])
                 self.stop_efftime = None
         self.stopped_exposure = False
-
+        etc.target_efftime = self.stop_efftime
         etc.process_guider_acq_image(path, self.roi_settings)
         self.etc = etc
         self.expnum = expnum
@@ -2802,7 +2824,6 @@ class EtcFileWatcher(NewFileWatcher):
                 print('Stopping exposure!')
                 #self.remote_client.stopexposure()
                 self.remote_client.stoprequested()
-                #self.remote_client.stoprequested()
                 self.stopped_exposure = True
 
     def heartbeat(self):
