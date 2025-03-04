@@ -1036,9 +1036,6 @@ class IbisEtc(object):
             inst_str.append('sky %.2f' % np.mean(iskies))
         if len(roi_inst_trs):
             inst_str.append('tr %.1f %%' % (np.mean(roi_inst_trs)*100))
-        inst = ''
-        if len(inst_str):
-            inst = '(inst: ' + ', '.join(inst_str) + ')'
 
         SEEING_CORR = DECamGuiderMeasurer.SEEING_CORRECTION_FACTOR
         fid = nominal_cal.fiducial_exptime(self.filt)
@@ -1058,9 +1055,12 @@ class IbisEtc(object):
               'sky %4.2f,' % skybr,
               'trans %5.1f %%,' % (100.*trans),
               'exp %5.1f,' % self.sci_times[-1],
-              'eff %5.1f%s sec' % (efftime, et_target),
-              inst
-              )
+              'eff %5.1f%s sec' % (efftime, et_target))
+        if len(inst_str):
+            #inst = '(inst: ' + ', '.join(inst_str) + ')'
+            inst = '             inst: ' + ', '.join(inst_str)
+            print(inst)
+
         self.cumul_sky.append(skybr)
         self.cumul_transparency.append(trans)
         self.cumul_seeing.append(seeing)
