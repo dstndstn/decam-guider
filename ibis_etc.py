@@ -1418,7 +1418,7 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None,
 def run_command(cmd):
     # used for multi-processing to run a given command line
     print('Running:', cmd)
-    rtn = os.systemd(cmd)
+    rtn = os.system(cmd)
     print('Return value:', rtn)
     return rtn
 
