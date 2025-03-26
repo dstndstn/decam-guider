@@ -123,13 +123,16 @@ class IbisEtc(object):
         self.rois = None
         self.ran_first_roi = False
 
-    def process_guider_acq_image(self, acqfn, roi_settings):
+    def process_guider_acq_image(self, acqfn, roi_settings, mp=None):
         '''
         * acqfn: string, filename of guider acquisition (first exposure) FITS file
         '''
         self.clear_after_exposure()
         print('Reading', acqfn)
+        t0 = time.time()
         chipnames,imgs,phdr,biases,_,_ = assemble_full_frames(acqfn, fit_exp=False)
+        t1 = time.time()
+        print('assemble_full_frames took %.3f sec' % (t1-t0))
         # ASSUME that science image starts at the same time as the guider acq image
         self.acq_datetime = datetime_from_header(phdr)
         self.sci_datetime = self.acq_datetime
@@ -164,6 +167,7 @@ class IbisEtc(object):
         imgfns = {}
         self.wcschips = []
         any_img = False
+        commands_to_run = []
         for i,(chip,img,biaslr) in enumerate(zip(chipnames, imgs, biases)):
             imgfn = os.path.join(self.procdir, '%s-acq-%s.fits' % (self.expnum, chip))
             imgfns[chip] = imgfn
@@ -213,11 +217,7 @@ class IbisEtc(object):
                     cmd = cmd + '--ra %.4f --dec %.4f --radius 5 ' % (ra, dec)
                 cmd = cmd + imgfn
                 #cmd = cmd + ' -v --no-delete-temp'
-                print(cmd)
-                rtn = os.system(cmd)
-                print('rtn:', rtn)
-                if rtn:
-                    continue
+                commands_to_run.append((cmd, wcsfn, chip))
 
             if self.debug:
                 any_img = True
@@ -226,6 +226,16 @@ class IbisEtc(object):
                 plt.xticks([]); plt.yticks([])
                 plt.title(chip)
 
+        if mp is not None:
+            res = mp.map(run_command, [c for c,_,_ in commands_to_run])
+            print('Got astrometry.net return values:', res)
+        else:
+            for cmd,_,_ in commands_to_run:
+                print(cmd)
+                rtn = os.system(cmd)
+                print('rtn:', rtn)
+
+        for _,wcsfn,chip in commands_to_run:
             if self.astrometry_net and os.path.exists(wcsfn):
                 self.wcschips.append(chip)
 
@@ -242,6 +252,7 @@ class IbisEtc(object):
             #trim_first=False, trim_last=False)
             flatmap.update(dict(list(zip(chipnames, flats))))
 
+        t0 = time.time()
         self.chipmeas = {}
         for chip in chipnames:
             print('Measuring', chip)
@@ -294,6 +305,8 @@ class IbisEtc(object):
 
             R = meas.run(**kw)
             self.chipmeas[chip] = (meas, R)
+        t1 = time.time()
+        print('Measuring chips took %.3f sec' % (t1-t0))
 
         zp0 = None
         kx = None
@@ -1401,6 +1414,13 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None,
         imgs.append(np.hstack(ampimgs))
 
     return chipnames, imgs, phdr, biases, biasimgs, data_offsets
+
+def run_command(cmd):
+    # used for multi-processing to run a given command line
+    print('Running:', cmd)
+    rtn = os.systemd(cmd)
+    print('Return value:', rtn)
+    return rtn
 
 class DECamGuiderMeasurer(RawMeasurer):
 
@@ -2686,8 +2706,9 @@ from obsbot import NewFileWatcher
 
 class EtcFileWatcher(NewFileWatcher):
     def __init__(self, *args, procdir='.', astrometry_config_file=None,
-                 remote_client=None, assume_photometric=False, **kwargs):
+                 remote_client=None, assume_photometric=False, mp=None, **kwargs):
         super().__init__(*args, **kwargs)
+        self.mp = mp
         self.procdir = procdir
         self.astrometry_config_file = astrometry_config_file
         self.remote_client = remote_client
@@ -2749,7 +2770,7 @@ class EtcFileWatcher(NewFileWatcher):
                 self.stop_efftime = None
         self.stopped_exposure = False
         etc.target_efftime = self.stop_efftime
-        etc.process_guider_acq_image(path, self.roi_settings)
+        etc.process_guider_acq_image(path, self.roi_settings, mp=self.mp)
         self.etc = etc
         self.expnum = expnum
         self.last_roi = 0
@@ -2875,14 +2896,22 @@ if __name__ == '__main__':
 
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--photometric', action='store_true', help='Assume the night is photometric (transparency = 100%)')
+    parser.add_argument('--photometric', action='store_true', help='Assume the night is photometric (transparency = 100%%)')
+    parser.add_argument('--no-stop-exposure', default=False, action='store_true',
+                        help='Do not actually try to stop exposures')
     opt = parser.parse_args()
+
+    if opt.no_stop_exposure:
+        rc = None
+
+    # 4-way multiprocessing (4 guide chips)
+    mp = multiproc(4)
 
     etc = EtcFileWatcher(watchdir,
                          procdir=procdir,
                          astrometry_config_file=astrometry_config_file,
                          remote_client=rc,
-                         assume_photometric=opt.photometric)
+                         assume_photometric=opt.photometric,
+                         mp=mp)
     etc.sleeptime = 1.
     etc.run()
-
