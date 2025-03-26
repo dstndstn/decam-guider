@@ -2896,10 +2896,12 @@ if __name__ == '__main__':
     parser.add_argument('--photometric', action='store_true', help='Assume the night is photometric (transparency = 100%%)')
     parser.add_argument('--no-stop-exposure', default=False, action='store_true',
                         help='Do not actually try to stop exposures')
+    parser.add_argument('--watch-dir', default=watchdir, help='Watch this directory for new guider images')
     opt = parser.parse_args()
 
     if opt.no_stop_exposure:
         rc = None
+    watchdir = opt.watch_dir
 
     # 4-way multiprocessing (4 guide chips)
     mp = multiproc(4)
