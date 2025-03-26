@@ -2577,6 +2577,9 @@ def run_expnum(args):
 
 
 def batch_main():
+    global astrometry_config_file
+    global procdir
+
     if False:
         from measure_raw import DECamMeasurer
         from astrometry.util.plotutils import PlotSequence
@@ -2641,7 +2644,7 @@ def batch_main():
 
     # Maybe no Astrometry.net index files... (not XMM field)
     # if expnum in [1336375, 1336397, 1336407, 
-    #               1336376, 1336413, 1336437, 1336438, 1336439, 1336440, 1336441, 1336442,
+   #               1336376, 1336413, 1336437, 1336438, 1336439, 1336440, 1336441, 1336442,
     #               1337014, 1337015, 1337016, 1337017]:
     
     # 2024-11-23
@@ -2662,22 +2665,22 @@ def batch_main():
     #expnums = list(range(1309133, 1309210))
 
     # M517, photometric, XMM, 2024-10-29-ish + 2
-    expnums = [1336418, 1336419, 1336420, 1336421, 1336422, 1336423, 1336424,
-       1336425, 1336426, 1336427, 1336428, 1336429, 1336430, 1336431,
-       1336432, 1336433, 1336434, 1336435, 1336436, 1336643, 1336644,
-       1336645, 1336646, 1336647, 1336648, 1336649, 1336650, 1336976,
-       1336982, 1336984, 1336985, 1336995, 1337004, 1337007, 1337008]
+    # expnums = [1336418, 1336419, 1336420, 1336421, 1336422, 1336423, 1336424,
+    #    1336425, 1336426, 1336427, 1336428, 1336429, 1336430, 1336431,
+    #    1336432, 1336433, 1336434, 1336435, 1336436, 1336643, 1336644,
+    #    1336645, 1336646, 1336647, 1336648, 1336649, 1336650, 1336976,
+    #    1336982, 1336984, 1336985, 1336995, 1337004, 1337007, 1337008]
     # All
     #expnums = list(range(1301441, 1342797+1))
+
+    expnums = [1370577]
     
     #expnums = [e for e in expnums if e in metadata]
     
-    mp = multiproc(128)
-    mp.map(run_expnum, [(e, metadata, procdir, astrometry_config_file) for e in expnums])
-    #for e in expnums:
-    #    run_expnum((e, metadata, procdir, astrometry_config_file))
-    sys.exit(0)
-
+    #mp = multiproc(128)
+    #mp.map(run_expnum, [(e, metadata, procdir, astrometry_config_file) for e in expnums])
+    for e in expnums:
+        run_expnum((e, metadata, procdir, astrometry_config_file))
 
 from obsbot import NewFileWatcher
 
