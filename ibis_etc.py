@@ -1444,55 +1444,55 @@ class DECamGuiderMeasurer(RawMeasurer):
     def remove_sky_gradients(self, img):
         pass
 
-    def get_reference_stars(self, wcs, band):
-        if self.use_ps1:
-            return super().get_reference_stars(wcs, band)
-        # Gaia
-        gaia = GaiaCatalog().get_catalog_in_wcs(wcs)
-        assert(gaia is not None)
-        assert(len(gaia) > 0)
-        gaia = GaiaCatalog.catalog_nantozero(gaia)
-        assert(gaia is not None)
-        print(len(gaia), 'Gaia stars')
-        #gaia.about()
-        return gaia
+    # def get_reference_stars(self, wcs, band):
+    #     if self.use_ps1:
+    #         return super().get_reference_stars(wcs, band)
+    #     # Gaia
+    #     gaia = GaiaCatalog().get_catalog_in_wcs(wcs)
+    #     assert(gaia is not None)
+    #     assert(len(gaia) > 0)
+    #     gaia = GaiaCatalog.catalog_nantozero(gaia)
+    #     assert(gaia is not None)
+    #     print(len(gaia), 'Gaia stars')
+    #     #gaia.about()
+    #     return gaia
 
-    def cut_reference_catalog(self, stars):
-        if self.use_ps1:
-            # Cut to stars with good g-i colors
-            stars.gicolor = stars.median[:,0] - stars.median[:,2]
-            keep = (stars.gicolor > 0.2) * (stars.gicolor < 2.7)
-            return keep
-        keep = (stars.phot_bp_mean_mag != 0) * (stars.phot_rp_mean_mag != 0)
-        print(sum(keep), 'of', len(stars), 'Gaia stars have BP-RP color')
-        stars.bprp_color = stars.phot_bp_mean_mag - stars.phot_rp_mean_mag
-        stars.bprp_color *= keep
-        # Arjun's color terms are G + colorterm(BP-RP)
-        stars.mag = stars.phot_g_mean_mag
-        return keep
-
-    def get_color_term(self, stars, band):
-        if self.use_ps1:
-            return super().get_color_term(stars, band)
-
-        polys = dict(
-            M411 = [-0.3464, 1.9527,-2.8314, 3.7463,-1.7361, 0.2621],
-            M438 = [-0.1806, 0.8371,-0.2328, 0.6813,-0.3504, 0.0527],
-            M464 = [-0.3263, 1.4027,-1.3349, 1.1068,-0.3669, 0.0424],
-            M490 = [-0.2287, 1.6287,-2.7733, 2.6698,-1.0101, 0.1330],
-            M517 = [-0.1937, 1.2866,-2.4744, 2.7437,-1.1472, 0.1623],
-            )
-        coeffs = polys[band]
-        color = stars.bprp_color
-        colorterm = np.zeros(len(color))
-        I = np.flatnonzero(stars.bprp_color != 0.0)
-        for power,coeff in enumerate(coeffs):
-            colorterm[I] += coeff * color[I]**power
-        return colorterm
-
-    def get_ps1_band(self, band):
-        print('Band', band)
-        return ps1cat.ps1band[band]
+    # def cut_reference_catalog(self, stars):
+    #     if self.use_ps1:
+    #         # Cut to stars with good g-i colors
+    #         stars.gicolor = stars.median[:,0] - stars.median[:,2]
+    #         keep = (stars.gicolor > 0.2) * (stars.gicolor < 2.7)
+    #         return keep
+    #     keep = (stars.phot_bp_mean_mag != 0) * (stars.phot_rp_mean_mag != 0)
+    #     print(sum(keep), 'of', len(stars), 'Gaia stars have BP-RP color')
+    #     stars.bprp_color = stars.phot_bp_mean_mag - stars.phot_rp_mean_mag
+    #     stars.bprp_color *= keep
+    #     # Arjun's color terms are G + colorterm(BP-RP)
+    #     stars.mag = stars.phot_g_mean_mag
+    #     return keep
+    # 
+    # def get_color_term(self, stars, band):
+    #     if self.use_ps1:
+    #         return super().get_color_term(stars, band)
+    # 
+    #     polys = dict(
+    #         M411 = [-0.3464, 1.9527,-2.8314, 3.7463,-1.7361, 0.2621],
+    #         M438 = [-0.1806, 0.8371,-0.2328, 0.6813,-0.3504, 0.0527],
+    #         M464 = [-0.3263, 1.4027,-1.3349, 1.1068,-0.3669, 0.0424],
+    #         M490 = [-0.2287, 1.6287,-2.7733, 2.6698,-1.0101, 0.1330],
+    #         M517 = [-0.1937, 1.2866,-2.4744, 2.7437,-1.1472, 0.1623],
+    #         )
+    #     coeffs = polys[band]
+    #     color = stars.bprp_color
+    #     colorterm = np.zeros(len(color))
+    #     I = np.flatnonzero(stars.bprp_color != 0.0)
+    #     for power,coeff in enumerate(coeffs):
+    #         colorterm[I] += coeff * color[I]**power
+    #     return colorterm
+    # 
+    # def get_ps1_band(self, band):
+    #     print('Band', band)
+    #     return ps1cat.ps1band[band]
 
     # def colorterm_ref_to_observed(self, mags, band):
     #     if self.use_ps1:
