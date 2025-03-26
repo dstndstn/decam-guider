@@ -352,13 +352,13 @@ class IbisEtc(object):
             if meas.use_ps1:
                 for i,b in enumerate('grizy'):
                     ref.set('ps1_mag_%s' % b, ref.median[:,i])
-                ref.color = ref.ps1_mag_g - ref.ps1_mag_i
+                #ref.color = ref.ps1_mag_g - ref.ps1_mag_i
                 meas.color_name = 'PS1 g-i'
                 ref.base_mag = ref.ps1_mag_g
                 meas.base_band_name = 'PS1 g'
                 meas.ref_survey_name = 'PS1'
             else:
-                ref.color = ref.bprp_color
+                #ref.color = ref.bprp_color
                 meas.color_name = 'Gaia BP-RP'
                 ref.base_mag = ref.phot_g_mean_mag
                 meas.base_band_name = 'Gaia G'
