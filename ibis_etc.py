@@ -291,7 +291,7 @@ class IbisEtc(object):
             #meas.maxshift = 5.
             meas.maxshift = 30.
     
-            kw = {}
+            kw = dict(ref='gaia')
             if self.debug:
                 #kw.update(ps=self.ps)
                 #meas.debug = True
