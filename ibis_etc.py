@@ -227,8 +227,11 @@ class IbisEtc(object):
                 plt.title(chip)
 
         if mp is not None:
+            t0 = time.time()
             res = mp.map(run_command, [c for c,_,_ in commands_to_run])
+            t1 = time.time()
             print('Got astrometry.net return values:', res)
+            print('Runtime: %.3f sec' % (t1-t0))
         else:
             for cmd,_,_ in commands_to_run:
                 print(cmd)
@@ -2900,11 +2903,14 @@ if __name__ == '__main__':
     parser.add_argument('--no-stop-exposure', default=False, action='store_true',
                         help='Do not actually try to stop exposures')
     parser.add_argument('--watch-dir', default=watchdir, help='Watch this directory for new guider images')
+    parser.add_argument('--astrometry', default=astrometry_config_file,
+                        help='Astrometry.net config file, default %(default)s')
     opt = parser.parse_args()
 
     if opt.no_stop_exposure:
         rc = None
     watchdir = opt.watch_dir
+    astrometry_config_file = opt.astrometry
 
     # 4-way multiprocessing (4 guide chips)
     mp = multiproc(4)
