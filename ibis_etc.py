@@ -51,6 +51,7 @@ class IbisEtc(object):
         self.debug = False
         self.astrometry_net = False
         self.assume_photometric = assume_photometric
+        self.target_efftime = None
 
     def set_plot_base(self, base):
         if base is None:
@@ -122,13 +123,16 @@ class IbisEtc(object):
         self.rois = None
         self.ran_first_roi = False
 
-    def process_guider_acq_image(self, acqfn, roi_settings):
+    def process_guider_acq_image(self, acqfn, roi_settings, mp=None):
         '''
         * acqfn: string, filename of guider acquisition (first exposure) FITS file
         '''
         self.clear_after_exposure()
         print('Reading', acqfn)
+        t0 = time.time()
         chipnames,imgs,phdr,biases,_,_ = assemble_full_frames(acqfn, fit_exp=False)
+        t1 = time.time()
+        print('assemble_full_frames took %.3f sec' % (t1-t0))
         # ASSUME that science image starts at the same time as the guider acq image
         self.acq_datetime = datetime_from_header(phdr)
         self.sci_datetime = self.acq_datetime
@@ -163,6 +167,7 @@ class IbisEtc(object):
         imgfns = {}
         self.wcschips = []
         any_img = False
+        commands_to_run = []
         for i,(chip,img,biaslr) in enumerate(zip(chipnames, imgs, biases)):
             imgfn = os.path.join(self.procdir, '%s-acq-%s.fits' % (self.expnum, chip))
             imgfns[chip] = imgfn
@@ -212,11 +217,7 @@ class IbisEtc(object):
                     cmd = cmd + '--ra %.4f --dec %.4f --radius 5 ' % (ra, dec)
                 cmd = cmd + imgfn
                 #cmd = cmd + ' -v --no-delete-temp'
-                print(cmd)
-                rtn = os.system(cmd)
-                print('rtn:', rtn)
-                if rtn:
-                    continue
+                commands_to_run.append((cmd, wcsfn, chip))
 
             if self.debug:
                 any_img = True
@@ -225,6 +226,19 @@ class IbisEtc(object):
                 plt.xticks([]); plt.yticks([])
                 plt.title(chip)
 
+        if mp is not None:
+            t0 = time.time()
+            res = mp.map(run_command, [c for c,_,_ in commands_to_run])
+            t1 = time.time()
+            print('Got astrometry.net return values:', res)
+            print('Runtime: %.3f sec' % (t1-t0))
+        else:
+            for cmd,_,_ in commands_to_run:
+                print(cmd)
+                rtn = os.system(cmd)
+                print('rtn:', rtn)
+
+        for _,wcsfn,chip in commands_to_run:
             if self.astrometry_net and os.path.exists(wcsfn):
                 self.wcschips.append(chip)
 
@@ -241,6 +255,7 @@ class IbisEtc(object):
             #trim_first=False, trim_last=False)
             flatmap.update(dict(list(zip(chipnames, flats))))
 
+        t0 = time.time()
         self.chipmeas = {}
         for chip in chipnames:
             print('Measuring', chip)
@@ -279,7 +294,7 @@ class IbisEtc(object):
             #meas.maxshift = 5.
             meas.maxshift = 30.
     
-            kw = {}
+            kw = dict(ref='gaia')
             if self.debug:
                 #kw.update(ps=self.ps)
                 #meas.debug = True
@@ -293,6 +308,8 @@ class IbisEtc(object):
 
             R = meas.run(**kw)
             self.chipmeas[chip] = (meas, R)
+        t1 = time.time()
+        print('Measuring chips took %.3f sec' % (t1-t0))
 
         zp0 = None
         kx = None
@@ -338,13 +355,13 @@ class IbisEtc(object):
             if meas.use_ps1:
                 for i,b in enumerate('grizy'):
                     ref.set('ps1_mag_%s' % b, ref.median[:,i])
-                ref.color = ref.ps1_mag_g - ref.ps1_mag_i
+                #ref.color = ref.ps1_mag_g - ref.ps1_mag_i
                 meas.color_name = 'PS1 g-i'
                 ref.base_mag = ref.ps1_mag_g
                 meas.base_band_name = 'PS1 g'
                 meas.ref_survey_name = 'PS1'
             else:
-                ref.color = ref.bprp_color
+                #ref.color = ref.bprp_color
                 meas.color_name = 'Gaia BP-RP'
                 ref.base_mag = ref.phot_g_mean_mag
                 meas.base_band_name = 'Gaia G'
@@ -995,22 +1012,27 @@ class IbisEtc(object):
             tr = 10.**(dmag / 2.5)
             roi_trs.append(tr)
 
+        inst_str = []
+
         if len(roi_trs):
-            print('Instantaneous transparency (from ROIs):', ', '.join(['%.1f' % (tr*100) for tr in roi_inst_trs]), '%')
-            print('Cumulative transparency (from ROIs):', ', '.join(['%.1f' % (tr*100) for tr in roi_trs]), '%')
+            #print('Instantaneous transparency (from ROIs):', ', '.join(['%.1f' % (tr*100) for tr in roi_inst_trs]), '%')
+            #print('Cumulative transparency (from ROIs):', ', '.join(['%.1f' % (tr*100) for tr in roi_trs]), '%')
             roi_trans = np.mean(roi_trs)
-            print('Mean transparency (from ROIs): %.1f %%' % (roi_trans*100))
+            #print('Mean transparency (from ROIs): %.1f %%' % (roi_trans*100))
             trans = roi_trans
 
         if self.assume_photometric:
-            print('--photometric was set, assuming 100% transparency.')
+            #print('--photometric was set, assuming 100% transparency.')
             trans = 1.0
 
+        isees = []
         for chip in self.starchips:
             isee = self.tractor_fits[chip][-1][TRACTOR_PARAM_PSFSIGMA] * 2.35 * pixsc
             self.inst_seeing[chip].append(isee)
+            isees.append(isee)
 
         # Instantaneous measurements
+        iskies = []
         for chip in self.chipnames:
             if len(self.dt_walls) > 1:
                 iskyrate = ((self.acc_strip_skies[chip][-1] - self.acc_strip_skies[chip][-2]) /
@@ -1022,6 +1044,14 @@ class IbisEtc(object):
             # HACK -- arbitrary sky correction to match copilot
             iskybr += DECamGuiderMeasurer.SKY_BRIGHTNESS_CORRECTION
             self.inst_sky[chip].append(iskybr)
+            iskies.append(iskybr)
+
+        if len(isees):
+            inst_str.append('see %.2f"' % np.mean(isees))
+        if len(iskies):
+            inst_str.append('sky %.2f' % np.mean(iskies))
+        if len(roi_inst_trs):
+            inst_str.append('tr %.1f %%' % (np.mean(roi_inst_trs)*100))
 
         SEEING_CORR = DECamGuiderMeasurer.SEEING_CORRECTION_FACTOR
         fid = nominal_cal.fiducial_exptime(self.filt)
@@ -1032,13 +1062,21 @@ class IbisEtc(object):
         expfactor = exposure_factor(fid, nominal_cal, self.airmass, ebv,
                                     seeing * SEEING_CORR, skybr, trans)
         efftime = self.sci_times[-1] / expfactor
+        if self.target_efftime:
+            et_target = ' / %5.1f' % self.target_efftime
+        else:
+            et_target = ''
         print('Exp', self.expnum, '/ %3i,' % roi_num,
               'see %4.2f",' % seeing,
               'sky %4.2f,' % skybr,
               'trans %5.1f %%,' % (100.*trans),
               'exp %5.1f,' % self.sci_times[-1],
-              'eff %5.1f sec' % efftime,
-              )
+              'eff %5.1f%s sec' % (efftime, et_target))
+        if len(inst_str):
+            #inst = '(inst: ' + ', '.join(inst_str) + ')'
+            inst = '             inst: ' + ', '.join(inst_str)
+            print(inst)
+
         self.cumul_sky.append(skybr)
         self.cumul_transparency.append(trans)
         self.cumul_seeing.append(seeing)
@@ -1380,6 +1418,13 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None,
 
     return chipnames, imgs, phdr, biases, biasimgs, data_offsets
 
+def run_command(cmd):
+    # used for multi-processing to run a given command line
+    print('Running:', cmd)
+    rtn = os.system(cmd)
+    print('Return value:', rtn)
+    return rtn
+
 class DECamGuiderMeasurer(RawMeasurer):
 
     ZEROPOINT_OFFSET = -2.5 * np.log10(3.23)
@@ -1402,55 +1447,55 @@ class DECamGuiderMeasurer(RawMeasurer):
     def remove_sky_gradients(self, img):
         pass
 
-    def get_reference_stars(self, wcs, band):
-        if self.use_ps1:
-            return super().get_reference_stars(wcs, band)
-        # Gaia
-        gaia = GaiaCatalog().get_catalog_in_wcs(wcs)
-        assert(gaia is not None)
-        assert(len(gaia) > 0)
-        gaia = GaiaCatalog.catalog_nantozero(gaia)
-        assert(gaia is not None)
-        print(len(gaia), 'Gaia stars')
-        #gaia.about()
-        return gaia
+    # def get_reference_stars(self, wcs, band):
+    #     if self.use_ps1:
+    #         return super().get_reference_stars(wcs, band)
+    #     # Gaia
+    #     gaia = GaiaCatalog().get_catalog_in_wcs(wcs)
+    #     assert(gaia is not None)
+    #     assert(len(gaia) > 0)
+    #     gaia = GaiaCatalog.catalog_nantozero(gaia)
+    #     assert(gaia is not None)
+    #     print(len(gaia), 'Gaia stars')
+    #     #gaia.about()
+    #     return gaia
 
-    def cut_reference_catalog(self, stars):
-        if self.use_ps1:
-            # Cut to stars with good g-i colors
-            stars.gicolor = stars.median[:,0] - stars.median[:,2]
-            keep = (stars.gicolor > 0.2) * (stars.gicolor < 2.7)
-            return keep
-        keep = (stars.phot_bp_mean_mag != 0) * (stars.phot_rp_mean_mag != 0)
-        print(sum(keep), 'of', len(stars), 'Gaia stars have BP-RP color')
-        stars.bprp_color = stars.phot_bp_mean_mag - stars.phot_rp_mean_mag
-        stars.bprp_color *= keep
-        # Arjun's color terms are G + colorterm(BP-RP)
-        stars.mag = stars.phot_g_mean_mag
-        return keep
-
-    def get_color_term(self, stars, band):
-        if self.use_ps1:
-            return super().get_color_term(stars, band)
-
-        polys = dict(
-            M411 = [-0.3464, 1.9527,-2.8314, 3.7463,-1.7361, 0.2621],
-            M438 = [-0.1806, 0.8371,-0.2328, 0.6813,-0.3504, 0.0527],
-            M464 = [-0.3263, 1.4027,-1.3349, 1.1068,-0.3669, 0.0424],
-            M490 = [-0.2287, 1.6287,-2.7733, 2.6698,-1.0101, 0.1330],
-            M517 = [-0.1937, 1.2866,-2.4744, 2.7437,-1.1472, 0.1623],
-            )
-        coeffs = polys[band]
-        color = stars.bprp_color
-        colorterm = np.zeros(len(color))
-        I = np.flatnonzero(stars.bprp_color != 0.0)
-        for power,coeff in enumerate(coeffs):
-            colorterm[I] += coeff * color[I]**power
-        return colorterm
-
-    def get_ps1_band(self, band):
-        print('Band', band)
-        return ps1cat.ps1band[band]
+    # def cut_reference_catalog(self, stars):
+    #     if self.use_ps1:
+    #         # Cut to stars with good g-i colors
+    #         stars.gicolor = stars.median[:,0] - stars.median[:,2]
+    #         keep = (stars.gicolor > 0.2) * (stars.gicolor < 2.7)
+    #         return keep
+    #     keep = (stars.phot_bp_mean_mag != 0) * (stars.phot_rp_mean_mag != 0)
+    #     print(sum(keep), 'of', len(stars), 'Gaia stars have BP-RP color')
+    #     stars.bprp_color = stars.phot_bp_mean_mag - stars.phot_rp_mean_mag
+    #     stars.bprp_color *= keep
+    #     # Arjun's color terms are G + colorterm(BP-RP)
+    #     stars.mag = stars.phot_g_mean_mag
+    #     return keep
+    # 
+    # def get_color_term(self, stars, band):
+    #     if self.use_ps1:
+    #         return super().get_color_term(stars, band)
+    # 
+    #     polys = dict(
+    #         M411 = [-0.3464, 1.9527,-2.8314, 3.7463,-1.7361, 0.2621],
+    #         M438 = [-0.1806, 0.8371,-0.2328, 0.6813,-0.3504, 0.0527],
+    #         M464 = [-0.3263, 1.4027,-1.3349, 1.1068,-0.3669, 0.0424],
+    #         M490 = [-0.2287, 1.6287,-2.7733, 2.6698,-1.0101, 0.1330],
+    #         M517 = [-0.1937, 1.2866,-2.4744, 2.7437,-1.1472, 0.1623],
+    #         )
+    #     coeffs = polys[band]
+    #     color = stars.bprp_color
+    #     colorterm = np.zeros(len(color))
+    #     I = np.flatnonzero(stars.bprp_color != 0.0)
+    #     for power,coeff in enumerate(coeffs):
+    #         colorterm[I] += coeff * color[I]**power
+    #     return colorterm
+    # 
+    # def get_ps1_band(self, band):
+    #     print('Band', band)
+    #     return ps1cat.ps1band[band]
 
     # def colorterm_ref_to_observed(self, mags, band):
     #     if self.use_ps1:
@@ -2557,6 +2602,9 @@ def run_expnum(args):
 
 
 def batch_main():
+    global astrometry_config_file
+    global procdir
+
     if False:
         from measure_raw import DECamMeasurer
         from astrometry.util.plotutils import PlotSequence
@@ -2621,7 +2669,7 @@ def batch_main():
 
     # Maybe no Astrometry.net index files... (not XMM field)
     # if expnum in [1336375, 1336397, 1336407, 
-    #               1336376, 1336413, 1336437, 1336438, 1336439, 1336440, 1336441, 1336442,
+   #               1336376, 1336413, 1336437, 1336438, 1336439, 1336440, 1336441, 1336442,
     #               1337014, 1337015, 1337016, 1337017]:
     
     # 2024-11-23
@@ -2654,23 +2702,23 @@ def batch_main():
     #expnums = list(range(1369580, 1369619))
 
     #expnums = list(range(1370237, 1370333+1))
-    expnums = [1370244]
+    #expnums = [1370244]
+    expnums = [1370577]
 
     #expnums = [e for e in expnums if e in metadata]
     
-    mp = multiproc(128)
-    mp.map(run_expnum, [(e, metadata, procdir, astrometry_config_file) for e in expnums])
-    #for e in expnums:
-    #    run_expnum((e, metadata, procdir, astrometry_config_file))
-    sys.exit(0)
-
+    #mp = multiproc(128)
+    #mp.map(run_expnum, [(e, metadata, procdir, astrometry_config_file) for e in expnums])
+    for e in expnums:
+        run_expnum((e, metadata, procdir, astrometry_config_file))
 
 from obsbot import NewFileWatcher
 
 class EtcFileWatcher(NewFileWatcher):
     def __init__(self, *args, procdir='.', astrometry_config_file=None,
-                 remote_client=None, assume_photometric=False, **kwargs):
+                 remote_client=None, assume_photometric=False, mp=None, **kwargs):
         super().__init__(*args, **kwargs)
+        self.mp = mp
         self.procdir = procdir
         self.astrometry_config_file = astrometry_config_file
         self.remote_client = remote_client
@@ -2731,8 +2779,8 @@ class EtcFileWatcher(NewFileWatcher):
                 print('Failed to parse "efftime": "%s"' % self.roi_settings['efftime'])
                 self.stop_efftime = None
         self.stopped_exposure = False
-
-        etc.process_guider_acq_image(path, self.roi_settings)
+        etc.target_efftime = self.stop_efftime
+        etc.process_guider_acq_image(path, self.roi_settings, mp=self.mp)
         self.etc = etc
         self.expnum = expnum
         self.last_roi = 0
@@ -2810,7 +2858,6 @@ class EtcFileWatcher(NewFileWatcher):
                 print('Stopping exposure!')
                 #self.remote_client.stopexposure()
                 self.remote_client.stoprequested()
-                #self.remote_client.stoprequested()
                 self.stopped_exposure = True
 
     def heartbeat(self):
@@ -2859,14 +2906,27 @@ if __name__ == '__main__':
 
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--photometric', action='store_true', help='Assume the night is photometric (transparency = 100%)')
+    parser.add_argument('--photometric', action='store_true', help='Assume the night is photometric (transparency = 100%%)')
+    parser.add_argument('--no-stop-exposure', default=False, action='store_true',
+                        help='Do not actually try to stop exposures')
+    parser.add_argument('--watch-dir', default=watchdir, help='Watch this directory for new guider images')
+    parser.add_argument('--astrometry', default=astrometry_config_file,
+                        help='Astrometry.net config file, default %(default)s')
     opt = parser.parse_args()
+
+    if opt.no_stop_exposure:
+        rc = None
+    watchdir = opt.watch_dir
+    astrometry_config_file = opt.astrometry
+
+    # 4-way multiprocessing (4 guide chips)
+    mp = multiproc(4)
 
     etc = EtcFileWatcher(watchdir,
                          procdir=procdir,
                          astrometry_config_file=astrometry_config_file,
                          remote_client=rc,
-                         assume_photometric=opt.photometric)
+                         assume_photometric=opt.photometric,
+                         mp=mp)
     etc.sleeptime = 1.
     etc.run()
-
