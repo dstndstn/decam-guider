@@ -2917,9 +2917,6 @@ class EtcFileWatcher(NewFileWatcher):
                 return
 
 if __name__ == '__main__':
-    batch_main()
-    sys.exit(0)
-
     procdir = '/tmp/etc/'
     astrometry_config_file='/data/declsp/astrometry-index-5200/cfg'
     watchdir = '/home3/guider_nfs/ETC/'
