@@ -1981,10 +1981,16 @@ def run_expnum(args):
                         break
                 if not found:
                     print('Does not exist:', roi_filename)
-                    break
+                    continue
                 etc.set_plot_base('roi-%i-%03i' % (expnum, roi_num))
                 #etc.set_plot_base(None)
-                etc.process_roi_image(roi_settings, roi_num, roi_filename)
+                try:
+                    etc.process_roi_image(roi_settings, roi_num, roi_filename)
+                except Exception as e:
+                    print('Error reading', roi_filename, ':', str(e))
+                    import traceback
+                    traceback.print_exc()
+                    continue
 
             etc.shift_all = shift_all
             etc.after_rows = after_rows
