@@ -24,7 +24,7 @@ from obsbot import exposure_factor, Neff
 
 import scipy.optimize
 from legacypipe.ps1cat import ps1_to_decam
-from legacypipe.gaiacat import GaiaCatalog
+from legacypipe.gaiacat import GaiaCatalog, gaia_to_decam
 
 import tractor
 import tractor.dense_optimizer
@@ -386,10 +386,16 @@ class IbisEtc(object):
                 fakestars = fits_table()
                 fakestars.median = np.zeros((len(gi),3))
                 fakestars.median[:,0] = gi
+                cc = meas.colorterm_ps1_to_observed(fakestars.median, self.filt)
             else:
                 fakestars = fits_table()
-                fakestars.bprp_color = gi
-            cc = meas.get_color_term(fakestars, self.filt)
+                fakestars.phot_g_mean_mag = np.zeros(len(gi))
+                fakestars.phot_bp_mean_mag = gi
+                fakestars.phot_rp_mean_mag = np.zeros(len(gi))
+                m = gaia_to_decam(fakestars, [self.filt], only_color_term=True)
+                cc = m[0]
+                #fakestars.bprp_color = gi
+            #cc = meas.get_color_term(fakestars, self.filt)
             #cc = meas.colorterm_ref_to_observed(fakemag, self.filt)
             offset = np.median(np.hstack(diffs))
             plt.plot(gi, offset + cc, '-')
@@ -557,9 +563,8 @@ class IbisEtc(object):
                     plt.title(chip)
     
                     ix,iy = int(x), int(y)
-                    print('Chip', chip, '- x,y', ix,iy)
-                    print('WCS:', meas.wcs)
-                    print('Center WCS:', meas.wcs.radec_center())
+                    #print('Chip', chip, '- x,y', ix,iy)
+                    #print('WCS:', meas.wcs)
                     #print('R keys:', R.keys())
                     H,W = img.shape
                     ix = np.clip(ix, S, W-S)
@@ -977,6 +982,9 @@ class IbisEtc(object):
         skip_rows = S['skip']
         fid = nominal_cal.fiducial_exptime(self.filt)
         zp0 = self.nom_zp - fid.k_co * (self.airmass - 1.)
+        print('Nominal zeropoint:', self.nom_zp, ', airmass-corrected:', zp0)
+        #zp0 = meas.zeropoint_for_exposure(self.filt, ext=meas.ext, exptime=exptime,
+        #   primhdr=R['primhdr'])
 
         for chip in self.starchips:
             if not chip in self.roi_star_mags:
@@ -1945,7 +1953,7 @@ def run_expnum(args):
         #    etc.stop_efftime = 200.
         if not hasattr(etc, 'ran_first_roi'):
             etc.ran_first_roi = False
-
+        
         state2fn = 'state2-%i.pickle' % expnum
         if not os.path.exists(state2fn):
 
@@ -2375,7 +2383,8 @@ def run_expnum(args):
         # Copilot terminology:
         # efftime = exptime / expfactor
         fid = nominal_cal.fiducial_exptime(etc.filt)
-        ebv = etc.ebv
+        #ebv = etc.ebv
+        ebv = 0.
         exptimes = np.array(etc.sci_times)
         if len(etc.starchips) == 0:
             return
@@ -2702,6 +2711,7 @@ def batch_main():
     #expnums = list(range(1369580, 1369619))
 
     #expnums = list(range(1370237, 1370333+1))
+    #expnums = [1370243]
     #expnums = [1370244]
     expnums = [1370577]
 
@@ -2881,8 +2891,8 @@ class EtcFileWatcher(NewFileWatcher):
                 return
 
 if __name__ == '__main__':
-    #batch_main()
-    #sys.exit(0)
+    batch_main()
+    sys.exit(0)
 
     procdir = '/tmp/etc/'
     astrometry_config_file='/data/declsp/astrometry-index-5200/cfg'
