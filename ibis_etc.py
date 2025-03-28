@@ -2946,12 +2946,17 @@ if __name__ == '__main__':
     parser.add_argument('--watch-dir', default=watchdir, help='Watch this directory for new guider images')
     parser.add_argument('--astrometry', default=astrometry_config_file,
                         help='Astrometry.net config file, default %(default)s')
+    parser.add_argument('--batch', default=False, action='store_true', help='Batch mode')
     opt = parser.parse_args()
 
     if opt.no_stop_exposure:
         rc = None
     watchdir = opt.watch_dir
     astrometry_config_file = opt.astrometry
+
+    if opt.batch:
+        batch_main()
+        sys.exit(0)
 
     # 4-way multiprocessing (4 guide chips)
     mp = multiproc(4)
