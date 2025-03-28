@@ -1918,6 +1918,13 @@ def run_expnum(args):
         hdr = fitsio.read_header(acq_fn)
         print('Filter', hdr['FILTER'])
 
+        eprocdir = os.path.join(procdir, '%s' % expnum)
+        if not os.path.exists(eprocdir):
+            try:
+                os.makedirs(eprocdir)
+            except:
+                pass
+
         statefn = 'state-%i.pickle' % expnum
         if not os.path.exists(statefn):
         #if True:
@@ -1929,7 +1936,7 @@ def run_expnum(args):
                 roi_settings['airmass'] = kwa['airmass']
 
             etc = IbisEtc()
-            etc.configure(procdir, astrometry_config_file)
+            etc.configure(eprocdir, astrometry_config_file)
             etc.set_plot_base('acq-%i' % expnum)
             #etc.set_plot_base('acq-noflat-%i' % expnum)
             print('Processing acq image', acq_fn)
@@ -1996,7 +2003,7 @@ def run_expnum(args):
             continue
 
         from astrometry.util.plotutils import PlotSequence
-        ps = PlotSequence(os.path.join(procdir, 'roi-summary-%i' % expnum))
+        ps = PlotSequence(os.path.join(eprocdir, 'roi-summary-%i' % expnum))
 
         plt.clf()
         plt.subplots_adjust(hspace=0)
@@ -2645,13 +2652,6 @@ def batch_main():
     print('Grabbed metadata for', len(metadata), 'exposures from copilot db')
     print('Max expnum:', max(metadata.keys()))
     
-    procdir = 'data-processed2'
-    if not os.path.exists(procdir):
-        try:
-            os.makedirs(procdir)
-        except:
-            pass
-
     for fn in ['~/data/INDEXES/5200/cfg',
                '~/cosmo/work/users/dstn/index-5200/cfg']:
         fn = os.path.expanduser(fn)
@@ -2777,8 +2777,16 @@ class EtcFileWatcher(NewFileWatcher):
         print('Got settings:', self.roi_settings)
 
         # Starting a new exposure!
+
+        eprocdir = os.path.join(self.procdir, '%s' % expnum)
+        if not os.path.exists(eprocdir):
+            try:
+                os.makedirs(eprocdir)
+            except:
+                pass
+
         etc = IbisEtc(assume_photometric=self.assume_photometric)
-        etc.configure(procdir, astrometry_config_file)
+        etc.configure(eprocdir, astrometry_config_file)
         #etc.set_plot_base('acq-%i' % expnum)
 
         if 'efftime' in self.roi_settings:
