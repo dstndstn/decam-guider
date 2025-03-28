@@ -2719,14 +2719,26 @@ def batch_main():
     #expnums = list(range(1370237, 1370333+1))
     #expnums = [1370243]
     #expnums = [1370244]
-    expnums = [1370577]
+    #expnums = [1370577]
 
     #expnums = [e for e in expnums if e in metadata]
-    
-    #mp = multiproc(128)
-    #mp.map(run_expnum, [(e, metadata, procdir, astrometry_config_file) for e in expnums])
-    for e in expnums:
-        run_expnum((e, metadata, procdir, astrometry_config_file))
+
+    # 2025-03-27
+    # expnums = (list(range(1374551, 1374558+1)) +
+    #            list(range(1374561, 1374564)) +
+    #            list(range(1374565, 1374603+1)) +
+    #            [1374617])
+
+    # 2025-03-28
+    expnums = (#list(range(1374752, 1374816+1)) +
+               list(range(1374792, 1374816+1)) +
+               list(range(1374818, 1374823+1)) +
+               [1374826])
+
+    mp = multiproc(128)
+    mp.map(run_expnum, [(e, metadata, procdir, astrometry_config_file) for e in expnums])
+    #for e in expnums:
+    #    run_expnum((e, metadata, procdir, astrometry_config_file))
 
 from obsbot import NewFileWatcher
 
@@ -2919,8 +2931,9 @@ if __name__ == '__main__':
     rc = RunRemoteClient()
 
     # NERSC
-    if False:
-        procdir = 'data-processed2'
+    if 'NERSC_HOST' in os.environ:
+        #procdir = 'data-processed2'
+        procdir = 'data-processed3'
         astrometry_config_file = os.path.expanduser('~/cosmo/work/users/dstn/index-5200/cfg')
         watchdir = 'temp-data'
         rc = None
