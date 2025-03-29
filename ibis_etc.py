@@ -115,6 +115,7 @@ class IbisEtc(object):
         self.inst_seeing_2 = None
         self.inst_sky = None
         self.inst_transparency = None
+        self.inst_transparency_roi = None
         self.cumul_seeing = None
         self.cumul_sky = None
         self.cumul_transparency = None
@@ -620,6 +621,7 @@ class IbisEtc(object):
             self.inst_seeing_2 = dict((chip,[]) for chip in self.chipnames)
             self.inst_sky = dict((chip,[]) for chip in self.chipnames)
             self.inst_transparency = dict((chip,[]) for chip in self.chipnames)
+            self.inst_transparency_roi = dict((chip,[]) for chip in self.chipnames)
             self.cumul_seeing = []
             self.cumul_sky = []
             self.cumul_transparency = []
@@ -1012,6 +1014,7 @@ class IbisEtc(object):
             dmag += chip_offsets[chip]
             tr = 10.**(dmag / 2.5)
             roi_inst_trs.append(tr)
+            self.inst_transparency_roi[chip].append(tr)
 
             # cumulative (average flux)
             apflux = np.sum(self.roi_apfluxes[chip]) / len(self.roi_apfluxes[chip])
