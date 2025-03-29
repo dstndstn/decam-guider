@@ -1165,6 +1165,8 @@ class IbisEtc(object):
 
 # for multiprocessing
 def tractor_opt(tr):
+    # ugh, work around a tractor pickling bug
+    tr.model_kwargs = {}
     tr.optimize_loop(shared_params=False)
     return tr.getParams()
 
