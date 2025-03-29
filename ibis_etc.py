@@ -35,6 +35,8 @@ import photutils
 #print('Reading SFD maps, complaints about END on the following lines are expected.')
 #sfd = SFDMap()
 
+import line_profiler
+
 # Remove a V-shape pattern (MAGIC number)
 guider_horiz_slope = 0.00168831
 
@@ -481,6 +483,7 @@ class IbisEtc(object):
             plt.title('Expnum %i' % self.expnum)
             self.ps.savefig()
 
+    @line_profiler.profile
     def process_roi_image(self, roi_settings, roi_num, roi_filename,
                           debug=False):
         if self.debug:
@@ -1164,6 +1167,7 @@ def blanton_sky(img, dist=5, step=10):
     sig1 = 1.4826 * mad / np.sqrt(2.)
     return sig1
 
+@line_profiler.profile
 def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None,
                          subtract_bias=True, trim_first=True, trim_last=True):
     F = fitsio.FITS(fn, 'r')
@@ -2835,6 +2839,9 @@ class EtcFileWatcher(NewFileWatcher):
         dirnm = os.path.dirname(path)
         if fn.startswith('roi_settings'):
             return False
+        # DEBUGGING
+        if fn == 'quit':
+            sys.exit(0)
         if not (fn.startswith('DECam_guider_') and fn.endswith('.fits.gz')):
             print('Unexpect filename pattern:', fn)
             return False
