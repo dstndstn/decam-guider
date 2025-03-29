@@ -663,7 +663,7 @@ class IbisEtc(object):
         kw = {}
         if self.debug and first_time:
             kw.update(ps=self.ps)
-        chips,imgs,phdr,biasvals,biasimgs,data_offs = assemble_full_frames(roi_filename, **kw)
+        chips,imgs,phdr,biasvals,biasimgs,data_offs = assemble_full_frames(roi_filename, mp=mp, **kw)
 
         if first_time:
             self.roi_exptime = float(phdr['GEXPTIME'])
@@ -1167,7 +1167,7 @@ def blanton_sky(img, dist=5, step=10):
     return sig1
 
 def process_amp(X):
-    j, img, hdr, trim_last, trim_first, fit_exp = X
+    j, img, hdr, trim_last, trim_first, fit_exp, drop_bias_rows, subtract_bias = X
 
     chipname = hdr['DETPOS']
     # Grab the data section
@@ -1430,7 +1430,7 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None,
             hdu = i*2 + j + 1
             img = F[hdu].read()
             hdr = F[hdu].read_header()
-            amp_args.append((j, img, hdr, trim_last, trim_first, fit_exp))
+            amp_args.append((j, img, hdr, trim_last, trim_first, fit_exp, drop_bias_rows, subtract_bias))
     R = mp.map(process_amp, amp_args)
 
     # 4 guide chips
