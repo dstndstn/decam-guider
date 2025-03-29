@@ -1435,7 +1435,7 @@ def run_command(cmd):
 
 class DECamGuiderMeasurer(RawMeasurer):
 
-    ZEROPOINT_OFFSET = -2.5 * np.log10(3.23)
+    ZEROPOINT_OFFSET = -2.5 * np.log10(3.23) - 0.30
     SKY_BRIGHTNESS_CORRECTION = -0.588
     SEEING_CORRECTION_FACTOR = 0.916
 
