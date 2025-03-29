@@ -485,7 +485,7 @@ class IbisEtc(object):
 
     @line_profiler.profile
     def process_roi_image(self, roi_settings, roi_num, roi_filename,
-                          debug=False):
+                          debug=False, mp=None):
         if self.debug:
             plt.clf()
             plt.subplots_adjust(hspace=0.2)
@@ -657,10 +657,9 @@ class IbisEtc(object):
                 self.roi_ref_stars[chip] = refstars[np.array([i])]
                 self.roi_star_mags[chip] = refstars.mag[i]
 
-        F = fitsio.FITS(roi_filename, 'r')
         if self.debug and False:
+            F = fitsio.FITS(roi_filename, 'r')
             self.roi_debug_plots(F)
-        #print('Reading', roi_filename)
         kw = {}
         if self.debug and first_time:
             kw.update(ps=self.ps)
@@ -1167,9 +1166,251 @@ def blanton_sky(img, dist=5, step=10):
     sig1 = 1.4826 * mad / np.sqrt(2.)
     return sig1
 
+def process_amp(X):
+    j, img, hdr, trim_last, trim_first, fit_exp = X
+
+    chipname = hdr['DETPOS']
+    # Grab the data section
+    datasec = hdr['DATASEC'].strip('[]').split(',')
+    assert(len(datasec) == 2)
+    (x0,x1),(y0,y1) = [[int(x) for x in vi] for vi in [w.split(':') for w in datasec]]
+    if trim_last:
+        # Trim off last row -- it sometimes glitches!
+        y1 -= 1
+    if trim_first:
+        # Also trim off the first row -- it's not glitchy in the same way, but does
+        # seem to have slightly different statistics than the remaining rows.
+        y0 += 1
+    maxrow = y1
+    dataslice = slice(y0-1, y1), slice(x0-1, x1)
+    data_x0, data_y0 = x0-1, y0-1
+
+    # Grab the overscan/"bias" section
+    biassec = hdr['BIASSEC'].strip('[]').split(',')
+    assert(len(biassec) == 2)
+    (x0,x1),(y0,y1) = [[int(x) for x in vi] for vi in [w.split(':') for w in biassec]]
+    if trim_last:
+        # Trim off last row -- it sometimes glitches!
+        y1 -= 1
+    if trim_first:
+        # And first row
+        y0 += 1
+    maxrow = max(maxrow, y1)
+    biasslice = slice(y0-1, y1), slice(x0-1, x1)
+    bias_x0, bias_y0 = x0-1, y0-1
+
+    ampimg  = img[dataslice]
+    biasimg = img[biasslice]
+
+    # the ROI images are 2048  x 1080 - with only the bottom 55 rows non-zero,
+    # so trim down to 55 x 1080 here.
+    # There is some prescan before the image, and some overscan (bias) after.
+    # Note, the logic in the exponential-decay fitting below depends on this
+    # having the same origin as the full image
+    fitimg = img[:maxrow, :].astype(np.float32)
+
+    bias_level = 0
+    data_level = 0
+
+    if fit_exp:
+
+        def exp_model(eamp, escale, pixel0, shape, ystride, xstride):
+            h,w = shape
+            # split the 2-d exponential into horizontal and vertical factors
+            model = (eamp *
+                     np.exp(-(pixel0 + ystride * np.arange(h)) / escale)[:,np.newaxis] *
+                     np.exp(-xstride * np.arange(w) / escale)[np.newaxis,:])
+            return model
+
+        # Fit an exponential drop-off to the whole pixel stream
+        # (in the data and bias slices), plus constants for the bias and data sections.
+        def objective(params, data_img, bias_img, data_pixel0, bias_pixel0,
+                      ystride, xstride):
+            data_offset, bias_offset, eamp, escale = params
+            model = exp_model(eamp, escale, data_pixel0, data_img.shape,
+                              ystride, xstride)
+            r = np.sum(np.abs(model + data_offset - data_img))
+            h,w = bias_img.shape
+            model = exp_model(eamp, escale, bias_pixel0, bias_img.shape,
+                              ystride, xstride)
+            r += np.sum(np.abs(model + bias_offset - bias_img))
+            #print('obj %.3f, %.3f %.3f, %.3f -> %.3f' %
+            # (data_offset, bias_offset, eamp, escale, r))
+            return r
+
+        # Flip the image left-right if it's the right-hand amp, because the readout
+        # is in the opposite direction
+        rev = (j == 1)
+
+        # Model the V-shaped pattern
+        h,w = fitimg.shape
+        xx = np.arange(w)
+        if not rev:
+            xx = xx[::-1]
+        v_model = xx * guider_horiz_slope
+
+        ystride = w
+        if rev:
+            data_pixel0 = data_y0 * w + (w-1 - data_x0)
+            bias_pixel0 = bias_y0 * w + (w-1 - bias_x0)
+            xstride = -1
+        else:
+            data_pixel0 = data_y0 * w + data_x0
+            bias_pixel0 = bias_y0 * w + bias_x0
+            xstride = +1
+
+        #t0 = time.time()
+        rowmed = np.median(fitimg[biasslice], axis=1)
+        med = np.median(rowmed[len(rowmed)//2:])
+        # Shift the levels of the images so that the offset parameters have values
+        # around 1.0 - to make life easier for the optimizer.
+        shift = (med - 1)
+        fit_data = fitimg[dataslice] - v_model[dataslice[1]][np.newaxis,:] - shift
+        fit_bias = fitimg[biasslice] - shift
+        x0 = (1., 1., float(rowmed[0] - med), 4800.)
+        #print('Initial parameters:', x0)
+        r = scipy.optimize.minimize(objective, x0,
+                                    args=(fit_data, fit_bias,
+                                          data_pixel0, bias_pixel0, ystride, xstride),
+                                    method='Nelder-Mead')
+        #t1 = time.time()
+        #print('Fitting took %.3f sec' % (t1-t0))
+        if not r.success:
+            print('Warning: Fitting result:', r)
+        #     from astrometry.util.plotutils import PlotSequence
+        #     ps = PlotSequence('fit-fail')
+        #assert(r.success)
+        #print('Fitted parameters:', r.x)
+        data_offset, bias_offset, eamp, escale = r.x
+        data_offset += shift
+        bias_offset += shift
+        # Evaluate the models (without the offset terms)
+        data_model = exp_model(eamp, escale, data_pixel0,
+                               ampimg.shape, ystride, xstride)
+        data_model += v_model[dataslice[1]][np.newaxis,:]
+        bias_model = exp_model(eamp, escale, bias_pixel0,
+                               biasimg.shape, ystride, xstride)
+        # HACK?  not adding V model to bias... it's small
+        bias_level = bias_offset
+        data_level = data_offset - bias_offset
+
+        # Subtract the exponential decay part of the model from the returned images
+        ampimg = ampimg - data_model
+        biasimg = biasimg - bias_model
+        # For the data image, subtract off the bias level.
+        ampimg -= bias_level
+
+        # these are cool, but a lot of plots...
+        if False and ps is not None:
+            # Images
+            plt.clf()
+            plt.subplot(2,3,1)
+            mn,mx = np.percentile(fitimg[biasslice].ravel(), [1,99])
+            ima = dict(interpolation='nearest', origin='lower', vmin=mn, vmax=mx)
+            plt.imshow(fitimg[biasslice], **ima)
+            plt.title('Bias image')
+            plt.subplot(2,3,2)
+            plt.imshow(bias_model + bias_offset, **ima)
+            plt.title('Bias model')
+            plt.subplot(2,3,3)
+            bias_resid = fitimg[biasslice] - (bias_model+bias_offset)
+            dmx = np.percentile(np.abs(bias_resid).ravel(), 99)
+            plt.imshow(bias_resid, interpolation='nearest', origin='lower',
+                       vmin=-dmx, vmax=+dmx)
+            plt.title('Bias resid')
+            plt.subplot(2,3,4)
+            ima.update(aspect='auto')
+            plt.imshow(fitimg[dataslice], **ima)
+            plt.title('Data image')
+            plt.subplot(2,3,5)
+            plt.imshow(data_model+data_offset, **ima)
+            plt.title('Data model')
+            plt.subplot(2,3,6)
+            data_resid = fitimg[dataslice] - (data_model+data_offset)
+            dmx = np.percentile(np.abs(data_resid).ravel(), 99)
+            plt.imshow(data_resid, interpolation='nearest', origin='lower',
+                       aspect='auto', vmin=-dmx, vmax=+dmx)
+            plt.title('Data resid')
+            plt.suptitle('Chip %s, amp %i' % (chipname, j+1))
+            ps.savefig()
+            # Median plots
+            plt.clf()
+            plt.subplot(2,2,1)
+            off = 2
+            plt.axhline(off, color='k', alpha=0.5)
+            plt.plot(off + np.median(fitimg[biasslice], axis=1) - bias_offset, '-')
+            plt.plot(off + np.median(bias_model, axis=1), '-')
+            plt.yscale('log')
+            plt.title('Bias')
+            plt.subplot(2,2,2)
+            plt.plot(np.median(bias_resid, axis=1), '-')
+            plt.title('Bias resid')
+            plt.subplot(2,2,3)
+            plt.axhline(off, color='k', alpha=0.5)
+            plt.plot(off + np.median(fitimg[dataslice], axis=1) - data_offset, '-')
+            plt.plot(off + np.median(data_model, axis=1), '-')
+            plt.yscale('log')
+            plt.title('Data')
+            plt.subplot(2,2,4)
+            diff = np.median(data_resid, axis=1)
+            plt.plot(diff, '-')
+            mx = max(np.abs(diff))
+            mx = max(1, mx)
+            plt.ylim(-mx,+mx)
+            plt.title('Data resid')
+            ps.savefig()
+            # Row plots
+            plt.clf()
+            plt.subplot(2,2,1)
+            off = 2
+            plt.axhline(off, color='k', alpha=0.5)
+            plt.plot(off - bias_offset + fitimg[biasslice], 'k-', alpha=0.1)
+            plt.plot(off + bias_model[:,0], '-', color='orange')
+            plt.plot(off + bias_model[:,-1], '-', color='orange')
+            plt.yscale('log')
+            plt.title('Bias')
+            plt.subplot(2,2,2)
+            plt.plot(bias_resid, 'k-', alpha=0.1)
+            plt.title('Bias resid')
+            plt.subplot(2,2,3)
+            plt.axhline(off, color='k', alpha=0.5)
+            plt.plot(off - data_offset + fitimg[dataslice], 'k-', alpha=0.01)
+            plt.plot(off + data_model[:,0], '-', color='orange')
+            plt.plot(off + data_model[:,-1], '-', color='orange')
+            plt.yscale('log')
+            plt.title('Data')
+            plt.xlabel('Row number')
+            plt.subplot(2,2,4)
+            mn,md = np.percentile(data_resid.ravel(), [1,50])
+            plt.plot(data_resid, 'k-', alpha=0.01)
+            plt.ylim(mn, md+(md-mn))
+            plt.title('Data resid')
+            ps.savefig()
+
+        #assert(r.success)
+
+    else:
+        # Not subtracting exponential model.
+        # Drop rows at the beginning
+        biasimg = biasimg[drop_bias_rows:, :]
+        # Sort the resulting 2000 x 50 array so that the 50 columns
+        # are sorted for each row
+        s = np.sort(biasimg, axis=1)
+        # Take the mean of the middle 10 pixels, for each row
+        m = np.mean(s[:, 20:30], axis=1)
+        # For a scalar level, take the median
+        m = np.median(m)
+        bias_level = m
+        if subtract_bias:
+            ampimg = ampimg - bias_level
+
+    return (chipname, biasimg.astype(np.float32), bias_level,
+            ampimg.astype(np.float32), data_level)
+
+
 @line_profiler.profile
 def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None,
-                         subtract_bias=True, trim_first=True, trim_last=True):
+                         subtract_bias=True, trim_first=True, trim_last=True, mp=None):
     F = fitsio.FITS(fn, 'r')
     phdr = F[0].read_header()
     chipnames = []
@@ -1177,6 +1418,21 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None,
     biases = []
     biasimgs = []
     data_offsets = []
+
+    if mp is None:
+        mp = multiproc()
+
+    amp_args = []
+    # 4 guide chips
+    for i in range(4):
+        # 2 amps per chip
+        for j in range(2):
+            hdu = i*2 + j + 1
+            img = F[hdu].read()
+            hdr = F[hdu].read_header()
+            amp_args.append((j, img, hdr, trim_last, trim_first, fit_exp))
+    R = mp.map(process_amp, amp_args)
+
     # 4 guide chips
     for i in range(4):
         # two amps per chip (assumed in Left-Right order)
@@ -1184,251 +1440,15 @@ def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None,
         biasvals = []
         data_offs = []
         for j in range(2):
-            hdu = i*2 + j + 1
-            img = F[hdu].read()
-            hdr = F[hdu].read_header()
-            chipname = hdr['DETPOS']
-            # Grab the data section
-            datasec = hdr['DATASEC'].strip('[]').split(',')
-            assert(len(datasec) == 2)
-            (x0,x1),(y0,y1) = [[int(x) for x in vi] for vi in [w.split(':') for w in datasec]]
-            if trim_last:
-                # Trim off last row -- it sometimes glitches!
-                y1 -= 1
-            if trim_first:
-                # Also trim off the first row -- it's not glitchy in the same way, but does
-                # seem to have slightly different statistics than the remaining rows.
-                y0 += 1
-            maxrow = y1
-            dataslice = slice(y0-1, y1), slice(x0-1, x1)
-            data_x0, data_y0 = x0-1, y0-1
-
-            # Grab the overscan/"bias" section
-            biassec = hdr['BIASSEC'].strip('[]').split(',')
-            assert(len(biassec) == 2)
-            (x0,x1),(y0,y1) = [[int(x) for x in vi] for vi in [w.split(':') for w in biassec]]
-            if trim_last:
-                # Trim off last row -- it sometimes glitches!
-                y1 -= 1
-            if trim_first:
-                # And first row
-                y0 += 1
-            maxrow = max(maxrow, y1)
-            biasslice = slice(y0-1, y1), slice(x0-1, x1)
-            bias_x0, bias_y0 = x0-1, y0-1
-
-            ampimg  = img[dataslice]
-            biasimg = img[biasslice]
-
-            # the ROI images are 2048  x 1080 - with only the bottom 55 rows non-zero,
-            # so trim down to 55 x 1080 here.
-            # There is some prescan before the image, and some overscan (bias) after.
-            # Note, the logic in the exponential-decay fitting below depends on this
-            # having the same origin as the full image
-            fitimg = img[:maxrow, :].astype(np.float32)
-
-            bias_level = 0
-            data_level = 0
-
-            if fit_exp:
-
-                def exp_model(eamp, escale, pixel0, shape, ystride, xstride):
-                    h,w = shape
-                    # split the 2-d exponential into horizontal and vertical factors
-                    model = (eamp *
-                             np.exp(-(pixel0 + ystride * np.arange(h)) / escale)[:,np.newaxis] *
-                             np.exp(-xstride * np.arange(w) / escale)[np.newaxis,:])
-                    return model
-
-                # Fit an exponential drop-off to the whole pixel stream
-                # (in the data and bias slices), plus constants for the bias and data sections.
-                def objective(params, data_img, bias_img, data_pixel0, bias_pixel0,
-                              ystride, xstride):
-                    data_offset, bias_offset, eamp, escale = params
-                    model = exp_model(eamp, escale, data_pixel0, data_img.shape,
-                                      ystride, xstride)
-                    r = np.sum(np.abs(model + data_offset - data_img))
-                    h,w = bias_img.shape
-                    model = exp_model(eamp, escale, bias_pixel0, bias_img.shape,
-                                      ystride, xstride)
-                    r += np.sum(np.abs(model + bias_offset - bias_img))
-                    #print('obj %.3f, %.3f %.3f, %.3f -> %.3f' %
-                    # (data_offset, bias_offset, eamp, escale, r))
-                    return r
-
-                # Flip the image left-right if it's the right-hand amp, because the readout
-                # is in the opposite direction
-                rev = (j == 1)
-
-                # Model the V-shaped pattern
-                h,w = fitimg.shape
-                xx = np.arange(w)
-                if not rev:
-                    xx = xx[::-1]
-                v_model = xx * guider_horiz_slope
-
-                ystride = w
-                if rev:
-                    data_pixel0 = data_y0 * w + (w-1 - data_x0)
-                    bias_pixel0 = bias_y0 * w + (w-1 - bias_x0)
-                    xstride = -1
-                else:
-                    data_pixel0 = data_y0 * w + data_x0
-                    bias_pixel0 = bias_y0 * w + bias_x0
-                    xstride = +1
-
-                #t0 = time.time()
-                rowmed = np.median(fitimg[biasslice], axis=1)
-                med = np.median(rowmed[len(rowmed)//2:])
-                # Shift the levels of the images so that the offset parameters have values
-                # around 1.0 - to make life easier for the optimizer.
-                shift = (med - 1)
-                fit_data = fitimg[dataslice] - v_model[dataslice[1]][np.newaxis,:] - shift
-                fit_bias = fitimg[biasslice] - shift
-                x0 = (1., 1., float(rowmed[0] - med), 4800.)
-                #print('Initial parameters:', x0)
-                r = scipy.optimize.minimize(objective, x0,
-                                            args=(fit_data, fit_bias,
-                                                  data_pixel0, bias_pixel0, ystride, xstride),
-                                            method='Nelder-Mead')
-                #t1 = time.time()
-                #print('Fitting took %.3f sec' % (t1-t0))
-                if not r.success:
-                    print('Warning: Fitting result:', r)
-                #     from astrometry.util.plotutils import PlotSequence
-                #     ps = PlotSequence('fit-fail')
-                #assert(r.success)
-                #print('Fitted parameters:', r.x)
-                data_offset, bias_offset, eamp, escale = r.x
-                data_offset += shift
-                bias_offset += shift
-                # Evaluate the models (without the offset terms)
-                data_model = exp_model(eamp, escale, data_pixel0,
-                                       ampimg.shape, ystride, xstride)
-                data_model += v_model[dataslice[1]][np.newaxis,:]
-                bias_model = exp_model(eamp, escale, bias_pixel0,
-                                       biasimg.shape, ystride, xstride)
-                # HACK?  not adding V model to bias... it's small
-                bias_level = bias_offset
-                data_level = data_offset - bias_offset
-
-                # Subtract the exponential decay part of the model from the returned images
-                ampimg = ampimg - data_model
-                biasimg = biasimg - bias_model
-                # For the data image, subtract off the bias level.
-                ampimg -= bias_level
-
-                # these are cool, but a lot of plots...
-                if False and ps is not None:
-                    # Images
-                    plt.clf()
-                    plt.subplot(2,3,1)
-                    mn,mx = np.percentile(fitimg[biasslice].ravel(), [1,99])
-                    ima = dict(interpolation='nearest', origin='lower', vmin=mn, vmax=mx)
-                    plt.imshow(fitimg[biasslice], **ima)
-                    plt.title('Bias image')
-                    plt.subplot(2,3,2)
-                    plt.imshow(bias_model + bias_offset, **ima)
-                    plt.title('Bias model')
-                    plt.subplot(2,3,3)
-                    bias_resid = fitimg[biasslice] - (bias_model+bias_offset)
-                    dmx = np.percentile(np.abs(bias_resid).ravel(), 99)
-                    plt.imshow(bias_resid, interpolation='nearest', origin='lower',
-                               vmin=-dmx, vmax=+dmx)
-                    plt.title('Bias resid')
-                    plt.subplot(2,3,4)
-                    ima.update(aspect='auto')
-                    plt.imshow(fitimg[dataslice], **ima)
-                    plt.title('Data image')
-                    plt.subplot(2,3,5)
-                    plt.imshow(data_model+data_offset, **ima)
-                    plt.title('Data model')
-                    plt.subplot(2,3,6)
-                    data_resid = fitimg[dataslice] - (data_model+data_offset)
-                    dmx = np.percentile(np.abs(data_resid).ravel(), 99)
-                    plt.imshow(data_resid, interpolation='nearest', origin='lower',
-                               aspect='auto', vmin=-dmx, vmax=+dmx)
-                    plt.title('Data resid')
-                    plt.suptitle('Chip %s, amp %i' % (chipname, j+1))
-                    ps.savefig()
-                    # Median plots
-                    plt.clf()
-                    plt.subplot(2,2,1)
-                    off = 2
-                    plt.axhline(off, color='k', alpha=0.5)
-                    plt.plot(off + np.median(fitimg[biasslice], axis=1) - bias_offset, '-')
-                    plt.plot(off + np.median(bias_model, axis=1), '-')
-                    plt.yscale('log')
-                    plt.title('Bias')
-                    plt.subplot(2,2,2)
-                    plt.plot(np.median(bias_resid, axis=1), '-')
-                    plt.title('Bias resid')
-                    plt.subplot(2,2,3)
-                    plt.axhline(off, color='k', alpha=0.5)
-                    plt.plot(off + np.median(fitimg[dataslice], axis=1) - data_offset, '-')
-                    plt.plot(off + np.median(data_model, axis=1), '-')
-                    plt.yscale('log')
-                    plt.title('Data')
-                    plt.subplot(2,2,4)
-                    diff = np.median(data_resid, axis=1)
-                    plt.plot(diff, '-')
-                    mx = max(np.abs(diff))
-                    mx = max(1, mx)
-                    plt.ylim(-mx,+mx)
-                    plt.title('Data resid')
-                    ps.savefig()
-                    # Row plots
-                    plt.clf()
-                    plt.subplot(2,2,1)
-                    off = 2
-                    plt.axhline(off, color='k', alpha=0.5)
-                    plt.plot(off - bias_offset + fitimg[biasslice], 'k-', alpha=0.1)
-                    plt.plot(off + bias_model[:,0], '-', color='orange')
-                    plt.plot(off + bias_model[:,-1], '-', color='orange')
-                    plt.yscale('log')
-                    plt.title('Bias')
-                    plt.subplot(2,2,2)
-                    plt.plot(bias_resid, 'k-', alpha=0.1)
-                    plt.title('Bias resid')
-                    plt.subplot(2,2,3)
-                    plt.axhline(off, color='k', alpha=0.5)
-                    plt.plot(off - data_offset + fitimg[dataslice], 'k-', alpha=0.01)
-                    plt.plot(off + data_model[:,0], '-', color='orange')
-                    plt.plot(off + data_model[:,-1], '-', color='orange')
-                    plt.yscale('log')
-                    plt.title('Data')
-                    plt.xlabel('Row number')
-                    plt.subplot(2,2,4)
-                    mn,md = np.percentile(data_resid.ravel(), [1,50])
-                    plt.plot(data_resid, 'k-', alpha=0.01)
-                    plt.ylim(mn, md+(md-mn))
-                    plt.title('Data resid')
-                    ps.savefig()
-
-                #assert(r.success)
-
-            else:
-                # Not subtracting exponential model.
-                # Drop rows at the beginning
-                biasimg = biasimg[drop_bias_rows:, :]
-                # Sort the resulting 2000 x 50 array so that the 50 columns
-                # are sorted for each row
-                s = np.sort(biasimg, axis=1)
-                # Take the mean of the middle 10 pixels, for each row
-                m = np.mean(s[:, 20:30], axis=1)
-                # For a scalar level, take the median
-                m = np.median(m)
-                bias_level = m
-                if subtract_bias:
-                    ampimg = ampimg - bias_level
-
-            biasimgs.append(biasimg.astype(np.float32))
+            ri = i*2 + j
+            chipname, biasimg, bias_level, ampimg, data_level = R[ri]
+            biasimgs.append(biasimg)
             biasvals.append(bias_level)
             data_offs.append(data_level)
-            ampimgs.append(ampimg.astype(np.float32))
-        biases.append(biasvals)            
+            ampimgs.append(ampimg)
+        biases.append(biasvals)
         data_offsets.append(data_offs)
-        chipnames.append(hdr['DETPOS'])
+        chipnames.append(chipname)
         imgs.append(np.hstack(ampimgs))
 
     return chipnames, imgs, phdr, biases, biasimgs, data_offsets
@@ -2863,7 +2883,7 @@ class EtcFileWatcher(NewFileWatcher):
                 return False
             # Catch exceptions and move on the next ROI frame!!
             try:
-                self.etc.process_roi_image(self.roi_settings, roinum, path)
+                self.etc.process_roi_image(self.roi_settings, roinum, path, mp=self.mp)
             except Exception as e:
                 print('Error handling', path, ':', str(e))
                 import traceback
@@ -2968,8 +2988,8 @@ if __name__ == '__main__':
         batch_main()
         sys.exit(0)
 
-    # 4-way multiprocessing (4 guide chips)
-    mp = multiproc(4)
+    # 8-way multiprocessing (4 guide chips x 2 amps for assemble_full_frames)
+    mp = multiproc(8)
 
     etc = EtcFileWatcher(watchdir,
                          procdir=procdir,
