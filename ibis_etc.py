@@ -838,6 +838,8 @@ class IbisEtc(object):
         else:
             tractor_chips = self.starchips
 
+        opt_tractors = []
+
         for ichip,chip in enumerate(tractor_chips):
             if not first_time:
                 itr = self.inst_tractors[chip]
@@ -883,18 +885,26 @@ class IbisEtc(object):
                 tim.sig1 = sig1
                 tim.inverr[:,:] = 1./sig1
 
-            #print('Fitting tractor model to instantaneous image')
-            itr.optimize_loop(shared_params=False)
-            #print('done')
-            #print('Instantaneous tractor fit:')
-            #itr.printThawedParams()
+            opt_tractors.append(itr)
+            opt_tractors.append(tr)
+
+        tr_params = mp.map(tractor_opt, opt_tractors)
+
+        for ichip,chip in enumerate(tractor_chips):
+            # unpack results
+            iparams = tr_params[ichip*2 + 0]
+            params = tr_params[ichip*2 + 1]
+
+            itr = self.inst_tractors[chip]
+            tr = self.tractors[chip]
+            tim = tr.images[0]
+
+            itr.setParams(iparams)
+            tr.setParams(params)
+
             isee = itr.getParams()[TRACTOR_PARAM_PSFSIGMA] * 2.35 * pixsc
             self.inst_seeing_2[chip].append(isee)
 
-            opt_args = dict(shared_params=False)
-            #print('Fitting tractor model to cumulative image')
-            X = tr.optimize_loop(**opt_args)
-            #print('done')
             s = tim.psf.getParams()[0]
             if s < 0:
                 ### Wtf
@@ -1152,6 +1162,11 @@ class IbisEtc(object):
         plt.xlabel('Row')
         plt.ylabel('Counts')
         self.ps.savefig()
+
+# for multiprocessing
+def tractor_opt(tr):
+    tr.optimize_loop(shared_params=False)
+    return tr.getParams()
 
 def datetime_from_header(hdr):
     t = hdr['UTSHUT'] #= '2024-02-29T01:45:30.524' / exp start
