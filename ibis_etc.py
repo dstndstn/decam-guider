@@ -890,6 +890,8 @@ class IbisEtc(object):
 
         tr_params = mp.map(tractor_opt, opt_tractors)
 
+        SEEING_CORR = DECamGuiderMeasurer.SEEING_CORRECTION_FACTOR
+
         for ichip,chip in enumerate(tractor_chips):
             # unpack results
             iparams = tr_params[ichip*2 + 0]
@@ -903,7 +905,10 @@ class IbisEtc(object):
             tr.setParams(params)
 
             isee = itr.getParams()[TRACTOR_PARAM_PSFSIGMA] * 2.35 * pixsc
+            # HACK -- seeing correction to match copilot
+            isee *= SEEING_CORR
             self.inst_seeing_2[chip].append(isee)
+            del isee
 
             s = tim.psf.getParams()[0]
             if s < 0:
@@ -955,11 +960,12 @@ class IbisEtc(object):
         # Cumulative measurements
         seeing = (np.mean([self.tractor_fits[chip][-1][TRACTOR_PARAM_PSFSIGMA]
                            for chip in self.starchips]) * 2.35 * pixsc)
+        seeing *= SEEING_CORR
+
         skyrate = np.mean([self.acc_strip_skies[chip][-1]
                            for chip in self.chipnames]) / sum(self.dt_walls)
         if self.nom_zp is None:
             self.nom_zp = nominal_cal.zeropoint(self.filt)
-
         skybr = -2.5 * np.log10(skyrate /pixsc/pixsc) + self.nom_zp
         # HACK -- arbitrary sky correction to match copilot
         skybr += DECamGuiderMeasurer.SKY_BRIGHTNESS_CORRECTION
@@ -1048,13 +1054,19 @@ class IbisEtc(object):
             #print('--photometric was set, assuming 100% transparency.')
             trans = 1.0
 
+        # Clamp...
+        trans = min(trans, 1.05)
+
+        # Instantaneous seeing
         isees = []
         for chip in self.starchips:
             isee = self.tractor_fits[chip][-1][TRACTOR_PARAM_PSFSIGMA] * 2.35 * pixsc
+            # HACK -- seeing correction to match copilot
+            isee *= SEEING_CORR
             self.inst_seeing[chip].append(isee)
             isees.append(isee)
 
-        # Instantaneous measurements
+        # Instantaneous sky
         iskies = []
         for chip in self.chipnames:
             if len(self.dt_walls) > 1:
@@ -1064,7 +1076,7 @@ class IbisEtc(object):
                 iskyrate = self.acc_strip_skies[chip][-1] / dt_wall
 
             iskybr = -2.5 * np.log10(iskyrate /pixsc/pixsc) + self.nom_zp
-            # HACK -- arbitrary sky correction to match copilot
+            # HACK -- sky correction to match copilot
             iskybr += DECamGuiderMeasurer.SKY_BRIGHTNESS_CORRECTION
             self.inst_sky[chip].append(iskybr)
             iskies.append(iskybr)
@@ -1076,14 +1088,13 @@ class IbisEtc(object):
         if len(roi_inst_trs):
             inst_str.append('tr %.1f %%' % (np.mean(roi_inst_trs)*100))
 
-        SEEING_CORR = DECamGuiderMeasurer.SEEING_CORRECTION_FACTOR
         fid = nominal_cal.fiducial_exptime(self.filt)
         ### Note -- for IBIS, we have folded the Galactic E(B-V) extinction into
         ### the requested "efftime"s, so here we do *not* include the extinction factor.
         #ebv = self.ebv
         ebv = 0.
         expfactor = exposure_factor(fid, nominal_cal, self.airmass, ebv,
-                                    seeing * SEEING_CORR, skybr, trans)
+                                    seeing, skybr, trans)
         efftime = self.sci_times[-1] / expfactor
         if self.target_efftime:
             et_target = ' / %5.1f' % self.target_efftime
@@ -2436,7 +2447,6 @@ def run_expnum(args):
         # plt.ylabel('Sky brightness (cumulative) (mag/arcsec^2)')
         # ps.savefig()
 
-        SEEING_CORR = DECamGuiderMeasurer.SEEING_CORRECTION_FACTOR
         # Copilot terminology:
         # efftime = exptime / expfactor
         fid = nominal_cal.fiducial_exptime(etc.filt)
@@ -2451,12 +2461,12 @@ def run_expnum(args):
         expfactor_inst = np.zeros(len(exptimes))
         for i in range(len(exptimes)):
             expfactor = exposure_factor(fid, nominal_cal, etc.airmass, ebv,
-                                        seeing[i] * SEEING_CORR, skybr[i], transp[i])
+                                        seeing[i], skybr[i], transp[i])
             expfactor_inst[i] = expfactor
         pixsc = nominal_cal.pixscale
         plt.clf()
         neff_fid = Neff(fid.seeing, pixsc)
-        neff     = Neff(seeing * SEEING_CORR, pixsc)
+        neff     = Neff(seeing, pixsc)
         efftime_seeing = neff_fid / neff
         efftime_trans = transp**2
         efftime_airmass = 10.**-(0.8 * fid.k_co * (etc.airmass - 1.))
@@ -2478,12 +2488,12 @@ def run_expnum(args):
         expfactor_cumul = np.zeros(len(exptimes))
         for i in range(len(exptimes)):
             expfactor = exposure_factor(fid, nominal_cal, etc.airmass, ebv,
-                                        etc.cumul_seeing[i] * SEEING_CORR,
+                                        etc.cumul_seeing[i],
                                         etc.cumul_sky[i],
                                         etc.cumul_transparency[i])
             expfactor_cumul[i] = expfactor
         plt.clf()
-        neff     = Neff(np.array(etc.cumul_seeing) * SEEING_CORR, pixsc)
+        neff     = Neff(np.array(etc.cumul_seeing), pixsc)
         efftime_seeing = neff_fid / neff
         efftime_trans = np.array(etc.cumul_transparency)**2
         efftime_airmass = 10.**-(0.8 * fid.k_co * (etc.airmass - 1.))
