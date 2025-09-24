@@ -1020,7 +1020,7 @@ class IbisEtc(object):
         skip_rows = S['skip']
         fid = nominal_cal.fiducial_exptime(self.filt)
         zp0 = self.nom_zp - fid.k_co * (self.airmass - 1.)
-        print('Nominal zeropoint:', self.nom_zp, ', airmass-corrected:', zp0)
+        #print('Nominal zeropoint:', self.nom_zp, ', airmass-corrected:', zp0)
         #zp0 = meas.zeropoint_for_exposure(self.filt, ext=meas.ext, exptime=exptime,
         #   primhdr=R['primhdr'])
 
@@ -1101,11 +1101,11 @@ class IbisEtc(object):
             iskies.append(iskybr)
 
         if len(isees):
-            inst_str.append('see %.2f"' % np.mean(isees))
+            inst_str.append('see %4.2f"' % np.mean(isees))
         if len(iskies):
-            inst_str.append('sky %.2f' % np.mean(iskies))
+            inst_str.append('sky %4.2f' % np.mean(iskies))
         if len(roi_inst_trs):
-            inst_str.append('tr %.1f %%' % (np.mean(roi_inst_trs)*100))
+            inst_str.append('trans %5.1f %%' % (np.mean(roi_inst_trs)*100))
 
         fid = nominal_cal.fiducial_exptime(self.filt)
         ### Note -- for IBIS, we have folded the Galactic E(B-V) extinction into
@@ -1119,7 +1119,8 @@ class IbisEtc(object):
             et_target = ' / %5.1f' % self.target_efftime
         else:
             et_target = ''
-        print('Exp', self.expnum, '/ %3i,' % roi_num,
+        print('Exp', self.expnum, '/ %3i,' % roi_num)
+        print('   cumulative:',
               'see %4.2f",' % seeing,
               'sky %4.2f,' % skybr,
               'trans %5.1f %%,' % (100.*trans),
@@ -1127,8 +1128,9 @@ class IbisEtc(object):
               'eff %5.1f%s sec' % (efftime, et_target))
         if len(inst_str):
             #inst = '(inst: ' + ', '.join(inst_str) + ')'
-            inst = '             inst: ' + ', '.join(inst_str)
-            print(inst)
+            #inst = '    instantaneous: ' + ', '.join(inst_str)
+            #print(inst)
+            print('instantaneous: ' + ', '.join(inst_str))
 
         self.cumul_sky.append(skybr)
         self.cumul_transparency.append(trans)
