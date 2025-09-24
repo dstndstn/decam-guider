@@ -869,24 +869,34 @@ class IbisEtc(object):
                                     psf=tractor.NCircularGaussianPSF([2.], [1.]),
                                     sky=tractor.ConstantSky(sky))
                 tim.psf.freezeParam('weights')
+                # Set PSF parameter bounds: [sigmas, weights]
+                # set sigmas for 0.5 to 3" seeing?
+                tim.psf.sigmas.lowers = [0.5 / 2.35 / pixsc]
+                tim.psf.sigmas.uppers = [3.0 / 2.35 / pixsc]
+                # print('PSF parameter bounds:', tim.psf.getLowerBounds(), tim.psf.getUpperBounds())
                 tim.sig1 = sig1
                 h,w = roi_img.shape
                 sky = self.strip_skies[chip][-1]
                 flux = np.sum(roi_img) - sky * h*w
+                #print('chip', chip, ': initialized flux to', flux)
                 flux = max(flux, 100)
                 src = tractor.PointSource(tractor.PixPos(roi_starx, roi_stary),
                                           tractor.Flux(flux))
                 tr = tractor.Tractor([tim], [src])
+                tr.optimizer = tractor.dense_optimizer.ConstrainedDenseOptimizer()
                 self.tractors[chip] = tr
                 # a second tractor object for instantaneous fitting
                 # (fitting each new ROI image)
                 # do this so that the source params start from last frame's values
                 itr = tr.copy()
-                itr.images[0].psf.freezeParam('weights')
+                tim = itr.images[0]
+                tim.psf.freezeParam('weights')
+                # Set PSF parameter bounds: [sigmas, weights]
+                # set sigmas for 0.5 to 3" seeing?
+                tim.psf.sigmas.lowers = [0.5 / 2.35 / pixsc]
+                tim.psf.sigmas.uppers = [3.0 / 2.35 / pixsc]
                 itr.optimizer = tractor.dense_optimizer.ConstrainedDenseOptimizer()
                 src = itr.catalog[0]
-                #src.psf.lowers = [0.5, 1.]
-                #src.psf.uppers = [5.,  1.]
                 self.inst_tractors[chip] = itr
             else:
                 # we already accumulated the image into tim.data above.
