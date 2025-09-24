@@ -29,7 +29,7 @@ from legacypipe.gaiacat import GaiaCatalog, gaia_to_decam
 import tractor
 import tractor.dense_optimizer
 
-import photutils
+from photutils.aperture import CircularAperture, aperture_photometry
 
 #from tractor.sfd import SFDMap
 #print('Reading SFD maps, complaints about END on the following lines are expected.')
@@ -812,8 +812,8 @@ class IbisEtc(object):
             ap = []
             #aprad_pix = 15.
             aprad_pix = 10.
-            aper = photutils.aperture.CircularAperture(apxy, aprad_pix)
-            p = photutils.aperture.aperture_photometry(roi_img - sky, aper)
+            aper = CircularAperture(apxy, aprad_pix)
+            p = aperture_photometry(roi_img - sky, aper)
             apflux = p.field('aperture_sum')
             apflux = float(apflux.data[0])
             # Mask out star pixels before computing median (sky)
