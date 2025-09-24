@@ -378,7 +378,7 @@ class IbisEtc(object):
                 ref = R['refstars']
                 apflux = R['apflux']
                 exptime = R['exptime']
-                apmag = -2.5 * np.log10(apflux / exptime)
+                apmag = -2.5 * (np.log10(apflux / exptime) - 9)
                 plt.plot(ref.color,  apmag - ref.base_mag, '.', label=chip)
                 diffs.append(apmag - (ref.base_mag + R['colorterm']))
             xl,xh = plt.xlim()
@@ -392,11 +392,14 @@ class IbisEtc(object):
                 cc = meas.colorterm_ps1_to_observed(fakestars.median, self.filt)
             else:
                 fakestars = fits_table()
-                fakestars.phot_g_mean_mag = np.zeros(len(gi))
-                fakestars.phot_bp_mean_mag = gi
-                fakestars.phot_rp_mean_mag = np.zeros(len(gi))
+                # We would use zeros, but gaia_to_decam treats zeros specially!
+                mag_offset = 0.001
+                fakestars.phot_g_mean_mag = np.zeros(len(gi)) + mag_offset
+                fakestars.phot_bp_mean_mag = gi + mag_offset
+                fakestars.phot_rp_mean_mag = np.zeros(len(gi)) + mag_offset
                 m = gaia_to_decam(fakestars, [self.filt], only_color_term=True)
-                cc = m[0]
+                cc = m[0] - mag_offset
+                del m
                 #fakestars.bprp_color = gi
             #cc = meas.get_color_term(fakestars, self.filt)
             #cc = meas.colorterm_ref_to_observed(fakemag, self.filt)
@@ -405,7 +408,7 @@ class IbisEtc(object):
             plt.xlim(xl,xh)
             m = np.mean(cc) + offset
             yl,yh = plt.ylim()
-            plt.ylim(max(yl, m-1), min(yh, m+1))
+            #plt.ylim(max(yl, m-1), min(yh, m+1))
             plt.legend()
             plt.xlabel('%s (mag)' % meas.color_name)
             plt.ylabel('%s - %s (mag)' % (self.filt, meas.base_band_name))
@@ -420,7 +423,7 @@ class IbisEtc(object):
                 apmag = -2.5 * np.log10(apflux / exptime)
                 plt.plot(ref.color,  apmag - ref.mag, '.', label=chip)
             yl,yh = plt.ylim()
-            plt.ylim(max(yl, m-1), min(yh, m+1))
+            #plt.ylim(max(yl, m-1), min(yh, m+1))
             plt.axhline(-zpt, color='k', linestyle='--')
             plt.legend()
             plt.xlabel('%s (mag)' % meas.color_name)
@@ -475,7 +478,7 @@ class IbisEtc(object):
             plt.axhline(0, color='k', alpha=0.1)
             plt.axhline(+0.1, color='k', linestyle='--', alpha=0.1)
             plt.axhline(-0.1, color='k', linestyle='--', alpha=0.1)
-            plt.xlim(11, 17)
+            plt.xlim(11, 20)
             plt.ylim(-0.5, +0.5)
             plt.legend(loc='upper left')
             plt.xlabel('%s ref (mag)' % meas.ref_survey_name)
@@ -486,6 +489,8 @@ class IbisEtc(object):
     @line_profiler.profile
     def process_roi_image(self, roi_settings, roi_num, roi_filename,
                           debug=False, mp=None):
+        if mp is None:
+            mp = multiproc()
         if self.debug:
             plt.clf()
             plt.subplots_adjust(hspace=0.2)
@@ -547,7 +552,7 @@ class IbisEtc(object):
                     det_x = R['all_x'] + trim_x0
                     det_y = R['all_y'] + trim_y0
 
-                    plt.subplot(2, 4, i+1)
+                    plt.subplot(3, 4, i+1)
                     img = self.imgs[chip]
                     mn,mx = np.percentile(img.ravel(), [25,98])
                     ima = dict(interpolation='nearest', origin='lower', vmin=mn, vmax=mx)
@@ -575,7 +580,10 @@ class IbisEtc(object):
                     iy = np.clip(iy, S, H-S)
                     x0,y0 = ix-S,iy-S
                     slc = slice(iy-S, iy+S+1), slice(ix-S, ix+S+1)
-                    plt.subplot(2, 4, 4 + i+1)
+                    plt.subplot(3, 4, 4 + i+1)
+                    plt.imshow(img[slc], **ima)
+                    plt.xticks([]); plt.yticks([])
+                    plt.subplot(3, 4, 8 + i+1)
                     plt.imshow(img[slc], **ima)
                     ax = plt.axis()
                     if refstars is not None:
@@ -924,8 +932,8 @@ class IbisEtc(object):
                 plt.xticks([]); plt.yticks([])
                 plt.title(chip + ' new ROI')
                 plt.subplot(3, 4, 5+ichip)
-                mx = np.percentile(roi_img.ravel(), 95)
-                plt.imshow(roi_img, interpolation='nearest', origin='lower',
+                mx = np.percentile(roi_imgs[chip].ravel(), 95)
+                plt.imshow(roi_imgs[chip], interpolation='nearest', origin='lower',
                            vmin=sky-3.*sig1, vmax=mx)
                 plt.xticks([]); plt.yticks([])
                 plt.title(chip + ' acc ROI')
@@ -935,7 +943,7 @@ class IbisEtc(object):
                            vmin=sky-3.*sig1, vmax=mx)
                 plt.title(chip + ' fit mod')
 
-            self.acc_rois[chip] = (roi_img, tim.inverr, tr.getModelImage(0))
+            self.acc_rois[chip] = (roi_imgs[chip], tim.inverr, tr.getModelImage(0))
 
             self.tractor_fits[chip].append(tr.getParams())
             #  images.image0.psf.sigmas.param0 = 2.2991302175858706
@@ -978,7 +986,7 @@ class IbisEtc(object):
             flux_now = self.tractor_fits[chip][-1][TRACTOR_PARAM_FLUX]
             if len(self.dt_walls) > 1:
                 flux_prev = self.tractor_fits[chip][-2][TRACTOR_PARAM_FLUX]
-                # the flux is cumulative, so now - prev is the increment
+                # the flux is cumulative, so "now - prev" is the increment
                 tr = (flux_now - flux_prev) / self.roiflux[chip]
             else:
                 # we just set roiflux = flux_now above
@@ -1035,7 +1043,8 @@ class IbisEtc(object):
             self.inst_transparency_roi[chip].append(tr)
 
             # cumulative (average flux)
-            apflux = np.sum(self.roi_apfluxes[chip]) / len(self.roi_apfluxes[chip])
+            #apflux = np.sum(self.roi_apfluxes[chip]) / len(self.roi_apfluxes[chip])
+            apflux = np.mean(self.roi_apfluxes[chip])
             dmag = 2.5 * np.log10(apflux / (refflux * et))
             dmag += chip_offsets[chip]
             tr = 10.**(dmag / 2.5)
@@ -2394,6 +2403,9 @@ def run_expnum(args):
         plt.clf()
         for chip in etc.starchips:
             plt.plot(etc.sci_times[:-1], etc.inst_transparency[chip][:-1], '.-', label=chip)
+        for chip in etc.starchips:
+            plt.plot(etc.sci_times[:-1], etc.inst_transparency[chip][:-1] / etc.transparency,
+                     '.-', lw=2, alpha=0.5)
         plt.plot(etc.sci_times[:-1], etc.cumul_transparency[:-1], 'k.-', label='Cumulative')
         plt.legend()
         plt.xlabel('Science exposure time (sec)')
@@ -2784,15 +2796,22 @@ def batch_main():
     #            [1374617])
 
     # 2025-03-28
-    expnums = (#list(range(1374752, 1374816+1)) +
-               list(range(1374792, 1374816+1)) +
-               list(range(1374818, 1374823+1)) +
-               [1374826])
+    #expnums = (#list(range(1374752, 1374816+1)) +
+    #           list(range(1374792, 1374816+1)) +
+    #           list(range(1374818, 1374823+1)) +
+    #           [1374826])
 
-    mp = multiproc(128)
-    mp.map(run_expnum, [(e, metadata, procdir, astrometry_config_file) for e in expnums])
-    #for e in expnums:
-    #    run_expnum((e, metadata, procdir, astrometry_config_file))
+    # 2025-09-23: guider selected a CR in GS2
+    #expnums = [1419704]
+    expnums = [1419736]
+
+    mp = multiproc(1)
+
+    for e in expnums:
+        run_expnum((e, metadata, procdir, astrometry_config_file))
+
+    #mp = multiproc(128)
+    #mp.map(run_expnum, [(e, metadata, procdir, astrometry_config_file) for e in expnums])
 
 from obsbot import NewFileWatcher
 
