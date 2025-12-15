@@ -1971,13 +1971,13 @@ def run_expnum(args):
     for expnum in [E]:
         print('Expnum', expnum)
         for roi_fn in ['~/ibis-data-transfer/guider-acq/roi_settings_%08i.dat' % expnum,
-                       'data-ETC/roi_settings_%08i.dat' % expnum]:
+                       'data-ETC/%ixxx/roi_settings_%08i.dat' % (expnum//1000, expnum)]:
             roi_fn = os.path.expanduser(roi_fn)
             if os.path.exists(roi_fn):
                 break
 
         for acq_fn in ['~/ibis-data-transfer/guider-acq/DECam_guider_%i/DECam_guider_%i_00000000.fits.gz' % (expnum, expnum),
-                       'data-ETC/DECam_guider_%i/DECam_guider_%i_00000000.fits.gz' % (expnum, expnum),
+                       'data-ETC/%ixxx/DECam_guider_%i/DECam_guider_%i_00000000.fits.gz' % (expnum//1000, expnum, expnum),
                        ]:
             acq_fn = os.path.expanduser(acq_fn)
             if os.path.exists(acq_fn):
@@ -2067,8 +2067,8 @@ def run_expnum(args):
                 for roi_filename in [
                         ('~/ibis-data-transfer/guider-sequences/%i/DECam_guider_%i_%08i.fits.gz' %
                          (expnum, expnum, roi_num)),
-                        ('data-ETC/DECam_guider_%i/DECam_guider_%i_%08i.fits.gz' %
-                         (expnum, expnum, roi_num)),
+                        ('data-ETC/%ixxx/DECam_guider_%i/DECam_guider_%i_%08i.fits.gz' %
+                         (expnum//1000, expnum, expnum, roi_num)),
                         ]:
                     roi_filename = os.path.expanduser(roi_filename)
                     if os.path.exists(roi_filename):
@@ -2077,7 +2077,10 @@ def run_expnum(args):
                 if not found:
                     print('Does not exist:', roi_filename)
                     continue
-                etc.set_plot_base('roi-%i-%03i' % (expnum, roi_num))
+                if roi_num == 2:
+                    etc.set_plot_base('roi-first-%i' % (expnum, roi_num))
+                else:
+                    etc.set_plot_base('roi-%i-%03i' % (expnum, roi_num))
                 #etc.set_plot_base(None)
                 try:
                     etc.process_roi_image(roi_settings, roi_num, roi_filename)
@@ -2754,14 +2757,14 @@ def batch_main():
         metadata[m.expnum] = dict(ra=m.rabore, dec=m.decbore, airmass=m.airmass)
     print('Grabbed metadata for', len(metadata), 'exposures from copilot db')
     print('Max expnum:', max(metadata.keys()))
-    
+
     for fn in ['~/data/INDEXES/5200/cfg',
                '~/cosmo/work/users/dstn/index-5200/cfg']:
         fn = os.path.expanduser(fn)
         if os.path.exists(fn):
             astrometry_config_file = fn
             break
-    
+
     # expnum = 1336362
     # # 1336360:
 
@@ -2783,7 +2786,7 @@ def batch_main():
     # if expnum in [1336375, 1336397, 1336407, 
    #               1336376, 1336413, 1336437, 1336438, 1336439, 1336440, 1336441, 1336442,
     #               1337014, 1337015, 1337016, 1337017]:
-    
+
     # 2024-11-23
     #expnums = list(range(1342565, 1342587))
     # 2024-11-24
@@ -2832,9 +2835,20 @@ def batch_main():
     #           list(range(1374818, 1374823+1)) +
     #           [1374826])
 
-    # 2025-09-23: guider selected a CR in GS2
-    #expnums = [1419704]
-    expnums = [1419736]
+    # 2025-09-23: guider selected a CR in GS2 / GN1?
+    #expnums = [1419704, 1419736]
+    #expnums = [1419711]
+
+
+    # 2025-10-15: overexposed
+    #expnums = [1426091,]
+
+    # 2025-12-10: lost guiding
+    #expnums = [1439986,]
+
+    # 2025-12-14: distorted PSFs
+    #expnums = [1441399, 1441400,]
+    expnums = [1441399,]
 
     mp = multiproc(1)
 
@@ -3041,7 +3055,7 @@ if __name__ == '__main__':
         astrometry_config_file = os.path.expanduser('~/cosmo/work/users/dstn/index-5200/cfg')
         watchdir = 'temp-data'
         rc = None
-    
+
     if not os.path.exists(procdir):
         os.makedirs(procdir)
 
