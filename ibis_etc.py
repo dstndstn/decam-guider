@@ -936,19 +936,26 @@ class IbisEtc(object):
                 tr.optimize_loop(**opt_args)
 
             if self.debug:
-                plt.subplot(3, 4, 1+ichip)
-                mx = np.percentile(orig_roi_imgs[chip].ravel(), 95)
+                #mx = np.percentile(orig_roi_imgs[chip].ravel(), 99)
+                mx = np.max(orig_roi_imgs[chip].ravel())
+                plt.subplot(4, 4, 1+ichip)
                 plt.imshow(orig_roi_imgs[chip], interpolation='nearest', origin='lower',
                            vmin=-5, vmax=mx)
                 plt.xticks([]); plt.yticks([])
                 plt.title(chip + ' new ROI')
-                plt.subplot(3, 4, 5+ichip)
+                mx = np.percentile(orig_roi_imgs[chip].ravel(), 95)
+                plt.subplot(4, 4, 5+ichip)
+                plt.imshow(orig_roi_imgs[chip], interpolation='nearest', origin='lower',
+                           vmin=-5, vmax=mx)
+                plt.xticks([]); plt.yticks([])
+                plt.title(chip + ' new ROI')
+                plt.subplot(4, 4, 9+ichip)
                 mx = np.percentile(roi_imgs[chip].ravel(), 95)
                 plt.imshow(roi_imgs[chip], interpolation='nearest', origin='lower',
                            vmin=sky-3.*sig1, vmax=mx)
                 plt.xticks([]); plt.yticks([])
                 plt.title(chip + ' acc ROI')
-                plt.subplot(3, 4, 9+ichip)
+                plt.subplot(4, 4, 13+ichip)
                 mod = tr.getModelImage(0)
                 plt.imshow(mod, interpolation='nearest', origin='lower',
                            vmin=sky-3.*sig1, vmax=mx)
@@ -974,6 +981,7 @@ class IbisEtc(object):
                     print('Warning: chip', chip, 'got small tractor flux %.1f - ignoring' % flux)
 
         if self.debug:
+            plt.suptitle('Expnum %i guider frame %i' % (self.expnum, roi_num))
             self.ps.savefig()
 
         # Cumulative measurements
