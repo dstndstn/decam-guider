@@ -54,6 +54,7 @@ class IbisEtc(object):
         self.astrometry_net = False
         self.assume_photometric = assume_photometric
         self.target_efftime = None
+        self.prev_times = None
 
     def set_plot_base(self, base):
         if base is None:
@@ -1109,12 +1110,20 @@ class IbisEtc(object):
 
         fid = nominal_cal.fiducial_exptime(self.filt)
         ### Note -- for IBIS, we have folded the Galactic E(B-V) extinction into
-        ### the requested "efftime"s, so here we do *not* include the extinction factor.
+        ### the requested "efftime"s, so here we do *not* include the extinction
+        ### factor.
         #ebv = self.ebv
         ebv = 0.
         expfactor = exposure_factor(fid, nominal_cal, self.airmass, ebv,
                                     seeing, skybr, trans)
         efftime = self.sci_times[-1] / expfactor
+
+        if self.prev_times is not None:
+            (exp_prev, eff_prev) = self.prev_times
+            deff_dt = (efftime - eff_prev) / (self.sci_times[-1] - exp_prev)
+            inst_str.append('speed %5.1f %%' % (100. * deff_dt))
+        self.prev_times = (self.sci_times[-1], efftime)
+
         if self.target_efftime:
             et_target = ' / %5.1f' % self.target_efftime
         else:
@@ -2036,7 +2045,9 @@ def run_expnum(args):
         #    etc.stop_efftime = 200.
         if not hasattr(etc, 'ran_first_roi'):
             etc.ran_first_roi = False
-        
+        if not hasattr(etc, 'prev_times'):
+            etc.prev_times = None
+
         state2fn = 'state2-%i.pickle' % expnum
         if not os.path.exists(state2fn):
 
