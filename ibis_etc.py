@@ -136,7 +136,7 @@ class IbisEtc(object):
         t0 = time.time()
         chipnames,imgs,phdr,biases,_,_ = assemble_full_frames(acqfn, fit_exp=False)
         t1 = time.time()
-        print('assemble_full_frames took %.3f sec' % (t1-t0))
+        #print('assemble_full_frames took %.3f sec' % (t1-t0))
         # ASSUME that science image starts at the same time as the guider acq image
         self.acq_datetime = datetime_from_header(phdr)
         self.sci_datetime = self.acq_datetime
@@ -985,8 +985,21 @@ class IbisEtc(object):
             self.ps.savefig()
 
         # Cumulative measurements
-        seeing = (np.mean([self.tractor_fits[chip][-1][TRACTOR_PARAM_PSFSIGMA]
-                           for chip in self.starchips]) * 2.35 * pixsc)
+        sees = np.array([self.tractor_fits[chip][-1][TRACTOR_PARAM_PSFSIGMA]
+                         for chip in self.starchips])  * 2.35 * pixsc
+        # Detect the one-wild-outlier case when we have 3-4 stars.
+        while len(sees) >= 3 and np.abs(np.median(sees) - np.mean(sees)) > 0.5:
+            # drop the most outlying one
+            i = np.argmax(np.abs(sees - np.median(sees)))
+            print('Dropping seeing estimate %.2f from [ %s ]' %
+                  (sees[i], ', '.join(['%.2f'%s for s in sees])))
+            keep = np.ones(len(sees), bool)
+            keep[i] = False
+            sees = sees[keep]
+            print('Now: median %.2f, mean %.2f (diff %.2f)' %
+                  (np.median(sees), np.mean(sees), np.abs(np.median(sees) - np.mean(sees))))
+
+        seeing = np.mean(sees)
         seeing *= SEEING_CORR
 
         skyrate = np.mean([self.acc_strip_skies[chip][-1]
