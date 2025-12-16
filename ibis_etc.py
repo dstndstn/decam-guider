@@ -2078,7 +2078,7 @@ def run_expnum(args):
                     print('Does not exist:', roi_filename)
                     continue
                 if roi_num == 2:
-                    etc.set_plot_base('roi-first-%i' % (expnum, roi_num))
+                    etc.set_plot_base('roi-first-%i' % (expnum))
                 else:
                     etc.set_plot_base('roi-%i-%03i' % (expnum, roi_num))
                 #etc.set_plot_base(None)
@@ -2848,7 +2848,10 @@ def batch_main():
 
     # 2025-12-14: distorted PSFs
     #expnums = [1441399, 1441400,]
-    expnums = [1441399,]
+
+    # 2025-12-15: long exposures
+    expnums = [ #1441555,
+        1441588]
 
     mp = multiproc(1)
 
