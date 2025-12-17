@@ -2953,7 +2953,7 @@ from obsbot import NewFileWatcher
 
 class EtcFileWatcher(NewFileWatcher):
     def __init__(self, *args, procdir='.', astrometry_config_file=None,
-                 remote_client=None, assume_photometric=False, mp=None, **kwargs):
+                 remote_client=None, assume_photometric=False, mp=None, db=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.mp = mp
         self.procdir = procdir
@@ -2967,6 +2967,7 @@ class EtcFileWatcher(NewFileWatcher):
         self.out_of_order = []
         self.stop_efftime = None
         self.stopped_exposure = False
+        self.db = db
 
     def filter_backlog(self, backlog):
         return []
@@ -3025,6 +3026,8 @@ class EtcFileWatcher(NewFileWatcher):
                 self.stop_efftime = None
         self.stopped_exposure = False
         etc.target_efftime = self.stop_efftime
+        if self.db is not None:
+            etc.set_db(self.db)
         etc.process_guider_acq_image(path, self.roi_settings, mp=self.mp)
         self.etc = etc
         self.expnum = expnum
@@ -3185,14 +3188,13 @@ if __name__ == '__main__':
     watchdir = opt.watch_dir
     astrometry_config_file = opt.astrometry
 
+    kw = {}
+    if opt.db:
+        import psycopg2
+        conn = psycopg2.connect('dbname=declsp')
+        kw.update(db=conn)
+
     if opt.batch:
-
-        kw = {}
-        if opt.db:
-            import psycopg2
-            conn = psycopg2.connect('dbname=declsp')
-            kw.update(db=conn)
-
         batch_main(**kw)
         sys.exit(0)
 
@@ -3204,6 +3206,7 @@ if __name__ == '__main__':
                          astrometry_config_file=astrometry_config_file,
                          remote_client=rc,
                          assume_photometric=opt.photometric,
-                         mp=mp)
+                         mp=mp,
+                         **kw)
     etc.sleeptime = 1.
     etc.run()
