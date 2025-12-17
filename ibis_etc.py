@@ -1223,7 +1223,7 @@ class IbisEtc(object):
                     ') values(' +
                     ','.join(['%s'] * 15) +
                     ');')
-                cspeed = 1./expfactor
+                cspeed = 100. * 1./expfactor
                 data = [[troi, self.expnum, roi_num,] +
                         [float(x) if x is not None else None for x in [
                             seeing, isee, trans * 100., itran, skybr, isky, cspeed, ispeed,
@@ -2941,7 +2941,8 @@ def batch_main(db=None):
     # 2025-12-15: long exposures
     #expnums = [ 1441555, 1441588]
 
-    expnums = [1441800,]
+    #expnums = [1441800, 1441801]
+    expnums = np.arange(1441802, 1441811)
 
     mp = multiproc(1)
 
