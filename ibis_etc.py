@@ -1230,6 +1230,7 @@ class IbisEtc(object):
                             self.airmass, efftime, self.target_efftime, exptime]]]
                 #print('Inserting data:', data)
                 cur.executemany(sql, data)
+                conn.commit()
 
         if first_time:
             self.ran_first_roi = True
@@ -2182,6 +2183,8 @@ def run_expnum(args):
             etc.skip_rows = skip_rows
 
             f = open(state2fn,'wb')
+            # not picklable
+            etc.db = None
             pickle.dump(etc, f)
             f.close()
         else:
