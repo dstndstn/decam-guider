@@ -2099,7 +2099,6 @@ def run_expnum(args):
         statefn = 'state-%i.pickle' % expnum
         if not os.path.exists(statefn):
         #if True:
-
             if ('RA' not in roi_settings) or (roi_settings['RA'] == 'null'):
                 kwa = metadata[expnum]
                 roi_settings['RA'] = kwa['ra']
@@ -2122,8 +2121,8 @@ def run_expnum(args):
         else:
             print('Reading', statefn)
             etc = pickle.load(open(statefn, 'rb'))
-            etc.set_db(db)
 
+        etc.set_db(db)
         # Drop from the state pickle
         for chip in etc.chipnames:
             meas,R = etc.chipmeas[chip]
