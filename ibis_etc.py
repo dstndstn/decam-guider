@@ -55,6 +55,10 @@ class IbisEtc(object):
         self.assume_photometric = assume_photometric
         self.target_efftime = None
         self.prev_times = None
+        self.db = None
+
+    def set_db(self, db):
+        self.db = db
 
     def set_plot_base(self, base):
         if base is None:
@@ -1167,6 +1171,10 @@ class IbisEtc(object):
         self.cumul_seeing.append(seeing)
         self.efftimes.append(efftime)
 
+        # Insert into db
+        if self.db:
+            print('DB:', self.db)
+
         if first_time:
             self.ran_first_roi = True
 
@@ -1980,7 +1988,7 @@ import json
 import pickle
 
 def run_expnum(args):
-    E, metadata, procdir, astrometry_config_file = args
+    E, metadata, procdir, astrometry_config_file, db = args
     for expnum in [E]:
         print('Expnum', expnum)
         for roi_fn in ['~/ibis-data-transfer/guider-acq/roi_settings_%08i.dat' % expnum,
@@ -2043,17 +2051,21 @@ def run_expnum(args):
 
             etc = IbisEtc()
             etc.configure(eprocdir, astrometry_config_file)
+            etc.set_db(db)
             etc.set_plot_base('acq-%i' % expnum)
             #etc.set_plot_base('acq-noflat-%i' % expnum)
             print('Processing acq image', acq_fn)
             etc.process_guider_acq_image(acq_fn, roi_settings)
 
             f = open(statefn,'wb')
+            # not picklable
+            etc.db = None
             pickle.dump(etc, f)
             f.close()
         else:
             print('Reading', statefn)
             etc = pickle.load(open(statefn, 'rb'))
+            etc.set_db(db)
 
         # Drop from the state pickle
         for chip in etc.chipnames:
@@ -2736,7 +2748,7 @@ def run_expnum(args):
 
 
 
-def batch_main():
+def batch_main(db=None):
     global astrometry_config_file
     global procdir
 
@@ -2861,12 +2873,14 @@ def batch_main():
 
     # 2025-12-14: distorted PSFs
     #expnums = [1441399, 1441400,]
-    expnums = [1441399,]
+    #expnums = [1441399,]
+
+    expnums = [1441800,]
 
     mp = multiproc(1)
 
     for e in expnums:
-        run_expnum((e, metadata, procdir, astrometry_config_file))
+        run_expnum((e, metadata, procdir, astrometry_config_file, db))
 
     #mp = multiproc(128)
     #mp.map(run_expnum, [(e, metadata, procdir, astrometry_config_file) for e in expnums])
@@ -3081,6 +3095,8 @@ if __name__ == '__main__':
     parser.add_argument('--astrometry', default=astrometry_config_file,
                         help='Astrometry.net config file, default %(default)s')
     parser.add_argument('--batch', default=False, action='store_true', help='Batch mode')
+    parser.add_argument('--db', default=False, action='store_true', help='Store results in db')
+
     opt = parser.parse_args()
 
     if opt.no_stop_exposure:
@@ -3089,7 +3105,14 @@ if __name__ == '__main__':
     astrometry_config_file = opt.astrometry
 
     if opt.batch:
-        batch_main()
+
+        kw = {}
+        if opt.db:
+            import psycopg2
+            conn = psycopg2.connect('dbname=declsp')
+            kw.update(db=conn)
+
+        batch_main(**kw)
         sys.exit(0)
 
     # 8-way multiprocessing (4 guide chips x 2 amps for assemble_full_frames)
