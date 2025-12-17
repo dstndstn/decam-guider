@@ -989,11 +989,16 @@ class IbisEtc(object):
             self.ps.savefig()
 
         # Cumulative measurements
-        sees = np.array([self.tractor_fits[chip][-1][TRACTOR_PARAM_PSFSIGMA]
-                         for chip in self.starchips])  * 2.35 * pixsc
+        # save individual-chip values for db
+        csees = {}
+        for chip in self.starchips:
+            s = self.tractor_fits[chip][-1][TRACTOR_PARAM_PSFSIGMA]
+            s *= 2.35 * pixsc
+            s *= SEEING_CORR
+            csees[chip] = s
+        sees = np.array(list(csees.values()))
         sees = clip_outliers(sees, SEEING_MAXRANGE)
         seeing = np.mean(sees)
-        seeing *= SEEING_CORR
 
         skyrate = np.mean([self.acc_strip_skies[chip][-1]
                            for chip in self.chipnames]) / sum(self.dt_walls)
@@ -1003,6 +1008,13 @@ class IbisEtc(object):
         # HACK -- arbitrary sky correction to match copilot
         skybr += DECamGuiderMeasurer.SKY_BRIGHTNESS_CORRECTION
         skybr = np.mean(skybr)
+        # save individual-chip values for db
+        cskies = {}
+        for chip in self.chipnames:
+            s = self.acc_strip_skies[chip][-1] / sum(self.dt_walls)
+            s = -2.5 * np.log10(s /pixsc/pixsc) + self.nom_zp
+            s += DECamGuiderMeasurer.SKY_BRIGHTNESS_CORRECTION
+            cskies[chip] = s
 
         # transparency
         trs = []
@@ -1027,8 +1039,8 @@ class IbisEtc(object):
         trans = np.mean(trs)
 
         # transparency on ROI frames alone
-        roi_trs = []
-        roi_inst_trs = []
+        roi_trs = {}
+        roi_inst_trs = {}
         S = compute_shift_all(roi_settings)
         shift_all = S['shift_all']
         after_rows = S['after_rows']
@@ -1064,7 +1076,7 @@ class IbisEtc(object):
             dmag = 2.5 * np.log10(apflux / (refflux * et))
             dmag += chip_offsets[chip]
             tr = 10.**(dmag / 2.5)
-            roi_inst_trs.append(tr)
+            roi_inst_trs[chip] = tr
             self.inst_transparency_roi[chip].append(tr)
 
             # cumulative (average flux)
@@ -1073,14 +1085,14 @@ class IbisEtc(object):
             dmag = 2.5 * np.log10(apflux / (refflux * et))
             dmag += chip_offsets[chip]
             tr = 10.**(dmag / 2.5)
-            roi_trs.append(tr)
+            roi_trs[chip] = tr
 
         inst_str = []
 
         if len(roi_trs):
             #print('Instantaneous transparency (from ROIs):', ', '.join(['%.1f' % (tr*100) for tr in roi_inst_trs]), '%')
             #print('Cumulative transparency (from ROIs):', ', '.join(['%.1f' % (tr*100) for tr in roi_trs]), '%')
-            roi_trans = np.mean(roi_trs)
+            roi_trans = np.mean(list(roi_trs.values()))
             #print('Mean transparency (from ROIs): %.1f %%' % (roi_trans*100))
             trans = roi_trans
 
@@ -1115,14 +1127,20 @@ class IbisEtc(object):
             self.inst_sky[chip].append(iskybr)
             iskies.append(iskybr)
 
+        isee = None
+        isky = None
+        itran = None
         if len(isees):
             isees = clip_outliers(isees, SEEING_MAXRANGE)
-            inst_str.append('see %4.2f"' % np.mean(isees))
+            isee = np.mean(isees)
+            inst_str.append('see %4.2f"' % isee)
         if len(iskies):
             #print('Sky estimates: [ %s ]' % (', '.join(['%.2f' % s for s in iskies])))
-            inst_str.append('sky %4.2f' % np.mean(iskies))
+            isky = np.mean(iskies)
+            inst_str.append('sky %4.2f' % isky)
         if len(roi_inst_trs):
-            inst_str.append('trans %5.1f %%' % (np.mean(roi_inst_trs)*100))
+            itran = np.mean(list(roi_inst_trs.values())) * 100.
+            inst_str.append('trans %5.1f %%' % itran)
 
         fid = nominal_cal.fiducial_exptime(self.filt)
         ### Note -- for IBIS, we have folded the Galactic E(B-V) extinction into
@@ -1134,10 +1152,12 @@ class IbisEtc(object):
                                     seeing, skybr, trans)
         efftime = self.sci_times[-1] / expfactor
 
+        ispeed = None
         if self.prev_times is not None:
             (exp_prev, eff_prev) = self.prev_times
             deff_dt = (efftime - eff_prev) / (self.sci_times[-1] - exp_prev)
-            inst_str.append('speed %5.1f %%' % (100. * deff_dt))
+            ispeed = 100. * deff_dt
+            inst_str.append('speed %5.1f %%' % ispeed)
         self.prev_times = (self.sci_times[-1], efftime)
 
         if self.target_efftime:
@@ -1145,11 +1165,12 @@ class IbisEtc(object):
         else:
             et_target = ''
         print('Exp', self.expnum, '/ %3i,' % roi_num)
+        exptime = self.sci_times[-1]
         print('   cumulative:',
               'see %4.2f",' % seeing,
               'sky %4.2f,' % skybr,
               'trans %5.1f %%,' % (100.*trans),
-              'exp %5.1f,' % self.sci_times[-1],
+              'exp %5.1f,' % exptime,
               'eff %5.1f%s sec' % (efftime, et_target))
         if len(inst_str):
             #inst = '(inst: ' + ', '.join(inst_str) + ')'
@@ -1165,6 +1186,50 @@ class IbisEtc(object):
         # Insert into db
         if self.db:
             print('DB:', self.db)
+            with conn.cursor() as cur:
+                sql = (
+                    'INSERT INTO guider_chip (time,expnum,frame,chip,seeing_cumul,' +
+                    'seeing_inst,transparency_cumul,transparency_inst,sky_cumul,sky_inst' +
+                    ') values(' +
+                    ','.join(['%s'] * 10) +
+                    ');')
+                data = []
+                for chip in self.chipnames:
+                    # sql none or 0.0 ?
+                    see_inst = None
+                    if chip in tractor_chips:
+                        see_inst = self.inst_seeing_2[chip][-1]
+                    see_cumul = csees.get(chip, None)
+                    sky_inst = None
+                    if chip in self.inst_sky:
+                        sky_inst = self.inst_sky[chip][-1]
+                    sky_cumul = cskies.get(chip, None)
+                    tran_inst = roi_inst_trs.get(chip, None)
+                    tran_cumul = roi_trs.get(chip, None)
+                    thisrow = ([troi, self.expnum, roi_num, chip] +
+                               [float(x) if x is not None else None for x in
+                                [see_cumul, see_inst, tran_cumul, tran_inst,
+                                 sky_cumul, sky_inst]])
+                    data.append(thisrow)
+                #print('Inserting data:', data)
+                cur.executemany(sql, data)
+
+                sql = (
+                    'INSERT INTO guider_frame (' +
+                    'time,expnum,frame,' +
+                    'seeing_cumul,seeing_inst,transparency_cumul,transparency_inst,' +
+                    'sky_cumul,sky_inst,speed_cumul,speed_inst,' +
+                    'airmass,efftime,efftime_target,exptime' +
+                    ') values(' +
+                    ','.join(['%s'] * 15) +
+                    ');')
+                cspeed = 1./expfactor
+                data = [[troi, self.expnum, roi_num,] +
+                        [float(x) if x is not None else None for x in [
+                            seeing, isee, trans * 100., itran, skybr, isky, cspeed, ispeed,
+                            self.airmass, efftime, self.target_efftime, exptime]]]
+                #print('Inserting data:', data)
+                cur.executemany(sql, data)
 
         if first_time:
             self.ran_first_roi = True
@@ -2071,6 +2136,12 @@ def run_expnum(args):
             etc.ran_first_roi = False
         if not hasattr(etc, 'prev_times'):
             etc.prev_times = None
+
+        if 'efftime' in roi_settings:
+            try:
+                etc.target_efftime = float(roi_settings['efftime'])
+            except:
+                pass
 
         state2fn = 'state2-%i.pickle' % expnum
         if not os.path.exists(state2fn):
