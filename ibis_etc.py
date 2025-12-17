@@ -991,18 +991,7 @@ class IbisEtc(object):
         # Cumulative measurements
         sees = np.array([self.tractor_fits[chip][-1][TRACTOR_PARAM_PSFSIGMA]
                          for chip in self.starchips])  * 2.35 * pixsc
-        # Detect the one-wild-outlier case when we have 3-4 stars.
-        while len(sees) >= 3 and np.abs(np.median(sees) - np.mean(sees)) > 0.5:
-            # drop the most outlying one
-            i = np.argmax(np.abs(sees - np.median(sees)))
-            print('Dropping seeing estimate %.2f from [ %s ]' %
-                  (sees[i], ', '.join(['%.2f'%s for s in sees])))
-            keep = np.ones(len(sees), bool)
-            keep[i] = False
-            sees = sees[keep]
-            print('Now: median %.2f, mean %.2f (diff %.2f)' %
-                  (np.median(sees), np.mean(sees), np.abs(np.median(sees) - np.mean(sees))))
-
+        sees = clip_outliers(sees, SEEING_MAXRANGE)
         seeing = np.mean(sees)
         seeing *= SEEING_CORR
 
@@ -1127,8 +1116,10 @@ class IbisEtc(object):
             iskies.append(iskybr)
 
         if len(isees):
+            isees = clip_outliers(isees, SEEING_MAXRANGE)
             inst_str.append('see %4.2f"' % np.mean(isees))
         if len(iskies):
+            #print('Sky estimates: [ %s ]' % (', '.join(['%.2f' % s for s in iskies])))
             inst_str.append('sky %4.2f' % np.mean(iskies))
         if len(roi_inst_trs):
             inst_str.append('trans %5.1f %%' % (np.mean(roi_inst_trs)*100))
@@ -2103,7 +2094,7 @@ def run_expnum(args):
                     print('Does not exist:', roi_filename)
                     continue
                 if roi_num == 2:
-                    etc.set_plot_base('roi-first-%i' % (expnum, roi_num))
+                    etc.set_plot_base('roi-first-%i' % (expnum))
                 else:
                     etc.set_plot_base('roi-%i-%03i' % (expnum, roi_num))
                 #etc.set_plot_base(None)
@@ -2873,7 +2864,9 @@ def batch_main(db=None):
 
     # 2025-12-14: distorted PSFs
     #expnums = [1441399, 1441400,]
-    #expnums = [1441399,]
+
+    # 2025-12-15: long exposures
+    #expnums = [ 1441555, 1441588]
 
     expnums = [1441800,]
 
@@ -3063,6 +3056,23 @@ class EtcFileWatcher(NewFileWatcher):
                 except (IOError,OSError) as e:
                     print('Failed to process file: %s (%s)' % (p, str(e)))
                 return
+
+SEEING_MAXRANGE = 0.5
+
+# Detect the one-wild-outlier case when we have 3-4 stars.
+def clip_outliers(x, maxrange):
+    x = np.array(x)
+    while len(x) >= 3 and np.max(x) - np.min(x) > maxrange:
+        # drop the most outlying one
+        i = np.argmax(np.abs(x - np.median(x)))
+        #print('Dropping seeing estimate %.2f from [ %s ]' %
+        #      (sees[i], ', '.join(['%.2f'%s for s in sees])))
+        keep = np.ones(len(x), bool)
+        keep[i] = False
+        x = x[keep]
+        #print('Now: median %.2f, mean %.2f (diff %.2f)' %
+        #(np.median(sees), np.mean(sees), np.abs(np.median(sees) - np.mean(sees))))
+    return x
 
 if __name__ == '__main__':
     procdir = '/tmp/etc/'
