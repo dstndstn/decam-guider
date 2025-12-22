@@ -3067,6 +3067,19 @@ class EtcFileWatcher(NewFileWatcher):
         elif expnum == self.expnum:
             if roinum != self.last_roi + 1:
                 print('The last ROI frame we saw was', self.last_roi, 'but this one is', roinum)
+                # Try to handle the case where one ROI frame is missing mid-exposure.
+                if self.last_roi > 0:
+                    # Check that the following N roi frames have appeared on disk
+                    next_found = True
+                    Nnext = 5
+                    for i in range(Nnext):
+                        if (expnum, self.last_roi + 1 + i) not in self.out_of_order:
+                            next_found = False
+                            break
+                    if next_found:
+                        print('The next %i ROI frames have appeared - giving up on frame %i' %
+                              (Nnext, self.last_roi))
+                    self.last_roi += 1
                 self.out_of_order[(expnum, roinum)] = path
                 return False
             # Catch exceptions and move on the next ROI frame!!
