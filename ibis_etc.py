@@ -1185,55 +1185,67 @@ class IbisEtc(object):
 
         # Insert into db
         if self.db:
-            print('DB:', self.db)
-            with conn.cursor() as cur:
-                sql = (
-                    'INSERT INTO guider_chip (time,expnum,frame,chip,seeing_cumul,' +
-                    'seeing_inst,transparency_cumul,transparency_inst,sky_cumul,sky_inst' +
-                    ') values(' +
-                    ','.join(['%s'] * 10) +
-                    ');')
-                data = []
-                for chip in self.chipnames:
-                    # sql none or 0.0 ?
-                    see_inst = None
-                    if chip in tractor_chips:
-                        see_inst = self.inst_seeing_2[chip][-1]
-                    see_cumul = csees.get(chip, None)
-                    sky_inst = None
-                    if chip in self.inst_sky:
-                        sky_inst = self.inst_sky[chip][-1]
-                    sky_cumul = cskies.get(chip, None)
-                    tran_inst = roi_inst_trs.get(chip, None)
-                    tran_cumul = roi_trs.get(chip, None)
-                    thisrow = ([troi, self.expnum, roi_num, chip] +
-                               [float(x) if x is not None else None for x in
-                                [see_cumul, see_inst, tran_cumul, tran_inst,
-                                 sky_cumul, sky_inst]])
-                    data.append(thisrow)
-                #print('Inserting data:', data)
-                cur.executemany(sql, data)
-
-                sql = (
-                    'INSERT INTO guider_frame (' +
-                    'time,expnum,frame,' +
-                    'seeing_cumul,seeing_inst,transparency_cumul,transparency_inst,' +
-                    'sky_cumul,sky_inst,speed_cumul,speed_inst,' +
-                    'airmass,efftime,efftime_target,exptime' +
-                    ') values(' +
-                    ','.join(['%s'] * 15) +
-                    ');')
-                cspeed = 100. * 1./expfactor
-                data = [[troi, self.expnum, roi_num,] +
-                        [float(x) if x is not None else None for x in [
-                            seeing, isee, trans * 100., itran, skybr, isky, cspeed, ispeed,
-                            self.airmass, efftime, self.target_efftime, exptime]]]
-                #print('Inserting data:', data)
-                cur.executemany(sql, data)
-                conn.commit()
+            try:
+                self.db_insert(tractor_chips, csees, cskies, roi_inst_trs, roi_trs,
+                               troi, roi_num, expfactor, seeing, isee, trans, itran,
+                               skybr, isky, cspeed, ispeed, efftime, exptime)
+            except Exception as e:
+                print('Database insertion failed.  Skipping further database transactions.')
+                import traceback
+                traceback.print_exc()
+                self.db = None
 
         if first_time:
             self.ran_first_roi = True
+
+    def db_insert(self, tractor_chips, csees, cskies, roi_inst_trs, roi_trs,
+                  troi, roi_num, expfactor, seeing, isee, trans, itran,
+                  skybr, isky, cspeed, ispeed, efftime, exptime):
+        with self.db.cursor() as cur:
+            sql = (
+                'INSERT INTO guider_chip (time,expnum,frame,chip,seeing_cumul,' +
+                'seeing_inst,transparency_cumul,transparency_inst,sky_cumul,sky_inst' +
+                ') values(' +
+                ','.join(['%s'] * 10) +
+                ');')
+            data = []
+            for chip in self.chipnames:
+                # sql none or 0.0 ?
+                see_inst = None
+                if chip in tractor_chips:
+                    see_inst = self.inst_seeing_2[chip][-1]
+                see_cumul = csees.get(chip, None)
+                sky_inst = None
+                if chip in self.inst_sky:
+                    sky_inst = self.inst_sky[chip][-1]
+                sky_cumul = cskies.get(chip, None)
+                tran_inst = roi_inst_trs.get(chip, None)
+                tran_cumul = roi_trs.get(chip, None)
+                thisrow = ([troi, self.expnum, roi_num, chip] +
+                           [float(x) if x is not None else None for x in
+                            [see_cumul, see_inst, tran_cumul, tran_inst,
+                             sky_cumul, sky_inst]])
+                data.append(thisrow)
+            #print('Inserting data:', data)
+            cur.executemany(sql, data)
+
+            sql = (
+                'INSERT INTO guider_frame (' +
+                'time,expnum,frame,' +
+                'seeing_cumul,seeing_inst,transparency_cumul,transparency_inst,' +
+                'sky_cumul,sky_inst,speed_cumul,speed_inst,' +
+                'airmass,efftime,efftime_target,exptime' +
+                ') values(' +
+                ','.join(['%s'] * 15) +
+                ');')
+            cspeed = 100. * 1./expfactor
+            data = [[troi, self.expnum, roi_num,] +
+                    [float(x) if x is not None else None for x in [
+                        seeing, isee, trans * 100., itran, skybr, isky, cspeed, ispeed,
+                        self.airmass, efftime, self.target_efftime, exptime]]]
+            #print('Inserting data:', data)
+            cur.executemany(sql, data)
+            self.db.commit()
 
     def roi_debug_plots(self, F):
         nguide = 4
