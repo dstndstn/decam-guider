@@ -1188,7 +1188,7 @@ class IbisEtc(object):
             try:
                 self.db_insert(tractor_chips, csees, cskies, roi_inst_trs, roi_trs,
                                troi, roi_num, expfactor, seeing, isee, trans, itran,
-                               skybr, isky, cspeed, ispeed, efftime, exptime)
+                               skybr, isky, ispeed, efftime, exptime)
             except Exception as e:
                 print('Database insertion failed.  Skipping further database transactions.')
                 import traceback
@@ -1200,7 +1200,7 @@ class IbisEtc(object):
 
     def db_insert(self, tractor_chips, csees, cskies, roi_inst_trs, roi_trs,
                   troi, roi_num, expfactor, seeing, isee, trans, itran,
-                  skybr, isky, cspeed, ispeed, efftime, exptime):
+                  skybr, isky, ispeed, efftime, exptime):
         with self.db.cursor() as cur:
             sql = (
                 'INSERT INTO guider_chip (time,expnum,frame,chip,seeing_cumul,' +
