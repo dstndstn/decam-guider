@@ -2966,7 +2966,7 @@ class EtcFileWatcher(NewFileWatcher):
         self.last_roi = None
         self.etc = None
         self.roi_settings = None
-        self.out_of_order = []
+        self.out_of_order = {}
         self.stop_efftime = None
         self.stopped_exposure = False
         self.db = db
@@ -3035,7 +3035,8 @@ class EtcFileWatcher(NewFileWatcher):
         self.expnum = expnum
         self.last_roi = 0
         # clear the out-of-order list of previous exposures
-        self.out_of_order = [(e,r,p) for (e,r,p) in self.out_of_order if e == self.expnum]
+        self.out_of_order = dict([((e,r), p) for (e,r),p in self.out_of_order.items()
+                                  if e == self.expnum])
 
         # HACK - testing
         #etc.stop_efftime = 30.
@@ -3066,7 +3067,7 @@ class EtcFileWatcher(NewFileWatcher):
         elif expnum == self.expnum:
             if roinum != self.last_roi + 1:
                 print('The last ROI frame we saw was', self.last_roi, 'but this one is', roinum)
-                self.out_of_order.append((expnum, roinum, path))
+                self.out_of_order[(expnum, roinum)] = path
                 return False
             # Catch exceptions and move on the next ROI frame!!
             try:
@@ -3096,11 +3097,11 @@ class EtcFileWatcher(NewFileWatcher):
                         # First frame -- process it to start this exposure!
                         self.start_exposure(fn, expnum)
                     else:
-                        self.out_of_order.append((expnum, roi, fn))
+                        self.out_of_order[(expnum, roi)] = fn
         else:
             print('Unexpected: we were processing expnum', self.expnum,
                   'and new expnum is', expnum, 'and ROI frame number', roinum)
-            self.out_of_order.append((expnum, roinum, path))
+            self.out_of_order[(expnum, roinum)] = path
         return True
 
     def stop_exposure(self):
@@ -3120,14 +3121,17 @@ class EtcFileWatcher(NewFileWatcher):
 
         print('Checking backlog... on expnum %s, last ROI was %s' %
               (self.expnum, self.last_roi))
-        for i,(e,r,p) in enumerate(self.out_of_order):
+        # fixme -- we could just check the dict for the expnum,roi we're looking forw,
+        # rather than iterating through it - but it's kind of nice to print out the
+        # backlog
+        for (e,r),p in self.out_of_order.items():
             if e == self.expnum:
                 print('  exp', e, 'roi', r, '->', p)
             if e == self.expnum and r == self.last_roi+1:
                 print('Popping an exposure from the backlog')
                 try:
                     self.process_file(p)
-                    del self.out_of_order[i]
+                    del self.out_of_order[(e,r)]
                     self.run_loop_sleep = False
                 except (IOError,OSError) as e:
                     print('Failed to process file: %s (%s)' % (p, str(e)))
