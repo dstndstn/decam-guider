@@ -2854,8 +2854,14 @@ def batch_main():
     #expnums = [1441399, 1441400,]
 
     # 2025-12-15: long exposures
-    expnums = [ 1441555, ]
-    #1441588]
+    #expnums = [ 1441555, 1441588 ]
+
+    # 2025-12-16: long exposure
+    #expnums = [ 1441792 ]
+    #expnums = [ 1441800 ]
+
+    # 2025-12-18: long exposure
+    expnums = [ 1442464 ]
 
     mp = multiproc(1)
 
