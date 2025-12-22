@@ -55,6 +55,10 @@ class IbisEtc(object):
         self.assume_photometric = assume_photometric
         self.target_efftime = None
         self.prev_times = None
+        self.db = None
+
+    def set_db(self, db):
+        self.db = db
 
     def set_plot_base(self, base):
         if base is None:
@@ -985,11 +989,16 @@ class IbisEtc(object):
             self.ps.savefig()
 
         # Cumulative measurements
-        sees = np.array([self.tractor_fits[chip][-1][TRACTOR_PARAM_PSFSIGMA]
-                         for chip in self.starchips])  * 2.35 * pixsc
+        # save individual-chip values for db
+        csees = {}
+        for chip in self.starchips:
+            s = self.tractor_fits[chip][-1][TRACTOR_PARAM_PSFSIGMA]
+            s *= 2.35 * pixsc
+            s *= SEEING_CORR
+            csees[chip] = s
+        sees = np.array(list(csees.values()))
         sees = clip_outliers(sees, SEEING_MAXRANGE)
         seeing = np.mean(sees)
-        seeing *= SEEING_CORR
 
         skyrate = np.mean([self.acc_strip_skies[chip][-1]
                            for chip in self.chipnames]) / sum(self.dt_walls)
@@ -999,6 +1008,13 @@ class IbisEtc(object):
         # HACK -- arbitrary sky correction to match copilot
         skybr += DECamGuiderMeasurer.SKY_BRIGHTNESS_CORRECTION
         skybr = np.mean(skybr)
+        # save individual-chip values for db
+        cskies = {}
+        for chip in self.chipnames:
+            s = self.acc_strip_skies[chip][-1] / sum(self.dt_walls)
+            s = -2.5 * np.log10(s /pixsc/pixsc) + self.nom_zp
+            s += DECamGuiderMeasurer.SKY_BRIGHTNESS_CORRECTION
+            cskies[chip] = s
 
         # transparency
         trs = []
@@ -1023,8 +1039,8 @@ class IbisEtc(object):
         trans = np.mean(trs)
 
         # transparency on ROI frames alone
-        roi_trs = []
-        roi_inst_trs = []
+        roi_trs = {}
+        roi_inst_trs = {}
         S = compute_shift_all(roi_settings)
         shift_all = S['shift_all']
         after_rows = S['after_rows']
@@ -1060,7 +1076,7 @@ class IbisEtc(object):
             dmag = 2.5 * np.log10(apflux / (refflux * et))
             dmag += chip_offsets[chip]
             tr = 10.**(dmag / 2.5)
-            roi_inst_trs.append(tr)
+            roi_inst_trs[chip] = tr
             self.inst_transparency_roi[chip].append(tr)
 
             # cumulative (average flux)
@@ -1069,14 +1085,14 @@ class IbisEtc(object):
             dmag = 2.5 * np.log10(apflux / (refflux * et))
             dmag += chip_offsets[chip]
             tr = 10.**(dmag / 2.5)
-            roi_trs.append(tr)
+            roi_trs[chip] = tr
 
         inst_str = []
 
         if len(roi_trs):
             #print('Instantaneous transparency (from ROIs):', ', '.join(['%.1f' % (tr*100) for tr in roi_inst_trs]), '%')
             #print('Cumulative transparency (from ROIs):', ', '.join(['%.1f' % (tr*100) for tr in roi_trs]), '%')
-            roi_trans = np.mean(roi_trs)
+            roi_trans = np.mean(list(roi_trs.values()))
             #print('Mean transparency (from ROIs): %.1f %%' % (roi_trans*100))
             trans = roi_trans
 
@@ -1111,14 +1127,20 @@ class IbisEtc(object):
             self.inst_sky[chip].append(iskybr)
             iskies.append(iskybr)
 
+        isee = None
+        isky = None
+        itran = None
         if len(isees):
             isees = clip_outliers(isees, SEEING_MAXRANGE)
-            inst_str.append('see %4.2f"' % np.mean(isees))
+            isee = np.mean(isees)
+            inst_str.append('see %4.2f"' % isee)
         if len(iskies):
             #print('Sky estimates: [ %s ]' % (', '.join(['%.2f' % s for s in iskies])))
-            inst_str.append('sky %4.2f' % np.mean(iskies))
+            isky = np.mean(iskies)
+            inst_str.append('sky %4.2f' % isky)
         if len(roi_inst_trs):
-            inst_str.append('trans %5.1f %%' % (np.mean(roi_inst_trs)*100))
+            itran = np.mean(list(roi_inst_trs.values())) * 100.
+            inst_str.append('trans %5.1f %%' % itran)
 
         fid = nominal_cal.fiducial_exptime(self.filt)
         ### Note -- for IBIS, we have folded the Galactic E(B-V) extinction into
@@ -1130,10 +1152,12 @@ class IbisEtc(object):
                                     seeing, skybr, trans)
         efftime = self.sci_times[-1] / expfactor
 
+        ispeed = None
         if self.prev_times is not None:
             (exp_prev, eff_prev) = self.prev_times
             deff_dt = (efftime - eff_prev) / (self.sci_times[-1] - exp_prev)
-            inst_str.append('speed %5.1f %%' % (100. * deff_dt))
+            ispeed = 100. * deff_dt
+            inst_str.append('speed %5.1f %%' % ispeed)
         self.prev_times = (self.sci_times[-1], efftime)
 
         if self.target_efftime:
@@ -1141,11 +1165,12 @@ class IbisEtc(object):
         else:
             et_target = ''
         print('Exp', self.expnum, '/ %3i,' % roi_num)
+        exptime = self.sci_times[-1]
         print('   cumulative:',
               'see %4.2f",' % seeing,
               'sky %4.2f,' % skybr,
               'trans %5.1f %%,' % (100.*trans),
-              'exp %5.1f,' % self.sci_times[-1],
+              'exp %5.1f,' % exptime,
               'eff %5.1f%s sec' % (efftime, et_target))
         if len(inst_str):
             #inst = '(inst: ' + ', '.join(inst_str) + ')'
@@ -1157,6 +1182,55 @@ class IbisEtc(object):
         self.cumul_transparency.append(trans)
         self.cumul_seeing.append(seeing)
         self.efftimes.append(efftime)
+
+        # Insert into db
+        if self.db:
+            print('DB:', self.db)
+            with conn.cursor() as cur:
+                sql = (
+                    'INSERT INTO guider_chip (time,expnum,frame,chip,seeing_cumul,' +
+                    'seeing_inst,transparency_cumul,transparency_inst,sky_cumul,sky_inst' +
+                    ') values(' +
+                    ','.join(['%s'] * 10) +
+                    ');')
+                data = []
+                for chip in self.chipnames:
+                    # sql none or 0.0 ?
+                    see_inst = None
+                    if chip in tractor_chips:
+                        see_inst = self.inst_seeing_2[chip][-1]
+                    see_cumul = csees.get(chip, None)
+                    sky_inst = None
+                    if chip in self.inst_sky:
+                        sky_inst = self.inst_sky[chip][-1]
+                    sky_cumul = cskies.get(chip, None)
+                    tran_inst = roi_inst_trs.get(chip, None)
+                    tran_cumul = roi_trs.get(chip, None)
+                    thisrow = ([troi, self.expnum, roi_num, chip] +
+                               [float(x) if x is not None else None for x in
+                                [see_cumul, see_inst, tran_cumul, tran_inst,
+                                 sky_cumul, sky_inst]])
+                    data.append(thisrow)
+                #print('Inserting data:', data)
+                cur.executemany(sql, data)
+
+                sql = (
+                    'INSERT INTO guider_frame (' +
+                    'time,expnum,frame,' +
+                    'seeing_cumul,seeing_inst,transparency_cumul,transparency_inst,' +
+                    'sky_cumul,sky_inst,speed_cumul,speed_inst,' +
+                    'airmass,efftime,efftime_target,exptime' +
+                    ') values(' +
+                    ','.join(['%s'] * 15) +
+                    ');')
+                cspeed = 100. * 1./expfactor
+                data = [[troi, self.expnum, roi_num,] +
+                        [float(x) if x is not None else None for x in [
+                            seeing, isee, trans * 100., itran, skybr, isky, cspeed, ispeed,
+                            self.airmass, efftime, self.target_efftime, exptime]]]
+                #print('Inserting data:', data)
+                cur.executemany(sql, data)
+                conn.commit()
 
         if first_time:
             self.ran_first_roi = True
@@ -1971,7 +2045,7 @@ import json
 import pickle
 
 def run_expnum(args):
-    E, metadata, procdir, astrometry_config_file = args
+    E, metadata, procdir, astrometry_config_file, db = args
     for expnum in [E]:
         print('Expnum', expnum)
         for roi_fn in ['~/ibis-data-transfer/guider-acq/roi_settings_%08i.dat' % expnum,
@@ -2025,7 +2099,6 @@ def run_expnum(args):
         statefn = 'state-%i.pickle' % expnum
         if not os.path.exists(statefn):
         #if True:
-
             if ('RA' not in roi_settings) or (roi_settings['RA'] == 'null'):
                 kwa = metadata[expnum]
                 roi_settings['RA'] = kwa['ra']
@@ -2034,18 +2107,22 @@ def run_expnum(args):
 
             etc = IbisEtc()
             etc.configure(eprocdir, astrometry_config_file)
+            etc.set_db(db)
             etc.set_plot_base('acq-%i' % expnum)
             #etc.set_plot_base('acq-noflat-%i' % expnum)
             print('Processing acq image', acq_fn)
             etc.process_guider_acq_image(acq_fn, roi_settings)
 
             f = open(statefn,'wb')
+            # not picklable
+            etc.db = None
             pickle.dump(etc, f)
             f.close()
         else:
             print('Reading', statefn)
             etc = pickle.load(open(statefn, 'rb'))
 
+        etc.set_db(db)
         # Drop from the state pickle
         for chip in etc.chipnames:
             meas,R = etc.chipmeas[chip]
@@ -2059,6 +2136,12 @@ def run_expnum(args):
             etc.ran_first_roi = False
         if not hasattr(etc, 'prev_times'):
             etc.prev_times = None
+
+        if 'efftime' in roi_settings:
+            try:
+                etc.target_efftime = float(roi_settings['efftime'])
+            except:
+                pass
 
         state2fn = 'state2-%i.pickle' % expnum
         if not os.path.exists(state2fn):
@@ -2099,6 +2182,8 @@ def run_expnum(args):
             etc.skip_rows = skip_rows
 
             f = open(state2fn,'wb')
+            # not picklable
+            etc.db = None
             pickle.dump(etc, f)
             f.close()
         else:
@@ -2727,7 +2812,7 @@ def run_expnum(args):
 
 
 
-def batch_main():
+def batch_main(db=None):
     global astrometry_config_file
     global procdir
 
@@ -2866,7 +2951,7 @@ def batch_main():
     mp = multiproc(1)
 
     for e in expnums:
-        run_expnum((e, metadata, procdir, astrometry_config_file))
+        run_expnum((e, metadata, procdir, astrometry_config_file, db))
 
     #mp = multiproc(128)
     #mp.map(run_expnum, [(e, metadata, procdir, astrometry_config_file) for e in expnums])
@@ -2875,7 +2960,7 @@ from obsbot import NewFileWatcher
 
 class EtcFileWatcher(NewFileWatcher):
     def __init__(self, *args, procdir='.', astrometry_config_file=None,
-                 remote_client=None, assume_photometric=False, mp=None, **kwargs):
+                 remote_client=None, assume_photometric=False, mp=None, db=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.mp = mp
         self.procdir = procdir
@@ -2886,9 +2971,10 @@ class EtcFileWatcher(NewFileWatcher):
         self.last_roi = None
         self.etc = None
         self.roi_settings = None
-        self.out_of_order = []
+        self.out_of_order = {}
         self.stop_efftime = None
         self.stopped_exposure = False
+        self.db = db
 
     def filter_backlog(self, backlog):
         return []
@@ -2947,12 +3033,15 @@ class EtcFileWatcher(NewFileWatcher):
                 self.stop_efftime = None
         self.stopped_exposure = False
         etc.target_efftime = self.stop_efftime
+        if self.db is not None:
+            etc.set_db(self.db)
         etc.process_guider_acq_image(path, self.roi_settings, mp=self.mp)
         self.etc = etc
         self.expnum = expnum
         self.last_roi = 0
         # clear the out-of-order list of previous exposures
-        self.out_of_order = [(e,r,p) for (e,r,p) in self.out_of_order if e == self.expnum]
+        self.out_of_order = dict([((e,r), p) for (e,r),p in self.out_of_order.items()
+                                  if e == self.expnum])
 
         # HACK - testing
         #etc.stop_efftime = 30.
@@ -2983,7 +3072,20 @@ class EtcFileWatcher(NewFileWatcher):
         elif expnum == self.expnum:
             if roinum != self.last_roi + 1:
                 print('The last ROI frame we saw was', self.last_roi, 'but this one is', roinum)
-                self.out_of_order.append((expnum, roinum, path))
+                # Try to handle the case where one ROI frame is missing mid-exposure.
+                if self.last_roi > 0:
+                    # Check that the following N roi frames have appeared on disk
+                    next_found = True
+                    Nnext = 5
+                    for i in range(Nnext):
+                        if (expnum, self.last_roi + 1 + i) not in self.out_of_order:
+                            next_found = False
+                            break
+                    if next_found:
+                        print('The next %i ROI frames have appeared - giving up on frame %i' %
+                              (Nnext, self.last_roi))
+                    self.last_roi += 1
+                self.out_of_order[(expnum, roinum)] = path
                 return False
             # Catch exceptions and move on the next ROI frame!!
             try:
@@ -3013,11 +3115,11 @@ class EtcFileWatcher(NewFileWatcher):
                         # First frame -- process it to start this exposure!
                         self.start_exposure(fn, expnum)
                     else:
-                        self.out_of_order.append((expnum, roi, fn))
+                        self.out_of_order[(expnum, roi)] = fn
         else:
             print('Unexpected: we were processing expnum', self.expnum,
                   'and new expnum is', expnum, 'and ROI frame number', roinum)
-            self.out_of_order.append((expnum, roinum, path))
+            self.out_of_order[(expnum, roinum)] = path
         return True
 
     def stop_exposure(self):
@@ -3037,14 +3139,17 @@ class EtcFileWatcher(NewFileWatcher):
 
         print('Checking backlog... on expnum %s, last ROI was %s' %
               (self.expnum, self.last_roi))
-        for i,(e,r,p) in enumerate(self.out_of_order):
+        # fixme -- we could just check the dict for the expnum,roi we're looking forw,
+        # rather than iterating through it - but it's kind of nice to print out the
+        # backlog
+        for (e,r),p in self.out_of_order.items():
             if e == self.expnum:
                 print('  exp', e, 'roi', r, '->', p)
             if e == self.expnum and r == self.last_roi+1:
                 print('Popping an exposure from the backlog')
                 try:
                     self.process_file(p)
-                    del self.out_of_order[i]
+                    del self.out_of_order[(e,r)]
                     self.run_loop_sleep = False
                 except (IOError,OSError) as e:
                     print('Failed to process file: %s (%s)' % (p, str(e)))
@@ -3098,6 +3203,8 @@ if __name__ == '__main__':
     parser.add_argument('--astrometry', default=astrometry_config_file,
                         help='Astrometry.net config file, default %(default)s')
     parser.add_argument('--batch', default=False, action='store_true', help='Batch mode')
+    parser.add_argument('--db', default=False, action='store_true', help='Store results in db')
+
     opt = parser.parse_args()
 
     if opt.no_stop_exposure:
@@ -3105,8 +3212,14 @@ if __name__ == '__main__':
     watchdir = opt.watch_dir
     astrometry_config_file = opt.astrometry
 
+    kw = {}
+    if opt.db:
+        import psycopg2
+        conn = psycopg2.connect('dbname=declsp')
+        kw.update(db=conn)
+
     if opt.batch:
-        batch_main()
+        batch_main(**kw)
         sys.exit(0)
 
     # 8-way multiprocessing (4 guide chips x 2 amps for assemble_full_frames)
@@ -3117,6 +3230,7 @@ if __name__ == '__main__':
                          astrometry_config_file=astrometry_config_file,
                          remote_client=rc,
                          assume_photometric=opt.photometric,
-                         mp=mp)
+                         mp=mp,
+                         **kw)
     etc.sleeptime = 1.
     etc.run()
