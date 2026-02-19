@@ -2961,7 +2961,15 @@ def batch_main(db=None):
     #expnums = [ 1442464 ]
 
     # 2025-12-21: testing
-    expnums = [ 1443180 ]
+    #expnums = [ 1443180 ]
+
+    # 2025-12-25: sky much brighter
+    #expnums = [ 1444285, 1444287 ] #1444286 ]
+
+    # 2026-02-16 - bright sky
+    #expnums = [ 1457485, ]
+    # 2026-02-18 - bug
+    expnums = [ 1457875, ]
 
     mp = multiproc(1)
 
