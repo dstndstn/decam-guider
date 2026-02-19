@@ -3238,8 +3238,20 @@ if __name__ == '__main__':
     kw = {}
     if opt.db:
         import psycopg2
-        conn = psycopg2.connect('dbname=declsp')
-        kw.update(db=conn)
+        try:
+            conn = psycopg2.connect('dbname=declsp')
+            kw.update(db=conn)
+        except Exception as e:
+            print('Failed to connect to database:')
+            print(e)
+            print()
+            print('You can check whether the database is running with')
+            print('  pg_ctl status')
+            print()
+            print('You can start the database with')
+            print('  pg_ctl start')
+            print()
+            sys.exit(0)
 
     if opt.batch:
         batch_main(**kw)
