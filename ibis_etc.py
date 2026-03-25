@@ -3096,20 +3096,27 @@ class EtcFileWatcher(NewFileWatcher):
             if roinum != self.last_roi + 1:
                 print('The last ROI frame we saw was', self.last_roi, 'but this one is', roinum)
                 self.out_of_order[(expnum, roinum)] = path
-                # Try to handle the case where one ROI frame is missing mid-exposure.
+                # Try to handle the case where one ROI frame is missing
+                # mid-exposure.  Ie, we're checking whether we should give up
+                # on frame last_roi + 1, which we do if the subsequent 5 frames
+                # have come in, AND it's not in the backlog.
                 if self.last_roi > 0:
-                    # Check that the following N roi frames have appeared on disk
-                    next_found = True
-                    Nnext = 5
-                    for i in range(Nnext):
-                        if (expnum, self.last_roi + 2 + i) not in self.out_of_order:
-                            next_found = False
-                            break
-                    if next_found:
-                        print('The next %i ROI frames have appeared - giving up on frame %i' %
-                              (Nnext, self.last_roi))
-                        self.last_roi += 1
-                return False
+                    if (expnum, self.last_roi + 1) in self.out_of_order:
+                        # last_roi + 1 is in the backlog.
+                        pass
+                    else:
+                        # Check if the following N roi frames have appeared on disk
+                        next_found = True
+                        Nnext = 5
+                        for i in range(Nnext):
+                            if (expnum, self.last_roi + 2 + i) not in self.out_of_order:
+                                next_found = False
+                                break
+                        if next_found:
+                            print('The next %i ROI frames have appeared - giving up on frame %i' %
+                                  (Nnext, self.last_roi+1))
+                            self.last_roi += 1
+                        return False
             # Catch exceptions and move on the next ROI frame!!
             try:
                 self.etc.process_roi_image(self.roi_settings, roinum, path, mp=self.mp)
