@@ -6,8 +6,6 @@ import pylab as plt
 import matplotlib
 import time
 
-#import pyfftw
-
 import fitsio
 
 from astrometry.util.util import Sip, Tan
@@ -1844,6 +1842,7 @@ class DECamGuiderMeasurer(RawMeasurer):
             self.ps.savefig()
 
             def fftpow(img, rolloff_fraction=0.04, clipping=20.):
+                import pyfftw
                 Ny, Nx = img.shape
                 Nh = Ny // 2  # half height of image
                 # clip bright pixels
@@ -1906,6 +1905,7 @@ class DECamGuiderMeasurer(RawMeasurer):
     # from Doug Finkbeiner, 2024-11-03
     def estimate_pattern_noise(self, img, rolloff_fraction=0.04, percentile=95.0,
                                clipping=20.):
+        import pyfftw
         Ny, Nx = img.shape
         Nh = Ny // 2  # half height of image
         # clip bright pixels
