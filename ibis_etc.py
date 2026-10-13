@@ -5,6 +5,7 @@ import numpy as np
 import pylab as plt
 import matplotlib
 import time
+import logging
 
 import fitsio
 
@@ -54,6 +55,13 @@ class IbisEtc(object):
         self.target_efftime = None
         self.prev_times = None
         self.db = None
+        self.logger = logging.getLogger('ibis_etc.IbisEtc')
+
+    def loginfo(self, *args, **kwargs):
+        self.logger.info(*args, **kwargs)
+
+    def logdebug(self, *args, **kwargs):
+        self.logger.debug(*args, **kwargs)
 
     def set_db(self, db):
         self.db = db
@@ -134,7 +142,7 @@ class IbisEtc(object):
         * acqfn: string, filename of guider acquisition (first exposure) FITS file
         '''
         self.clear_after_exposure()
-        print('Reading', acqfn)
+        self.loginfo('Reading %s' % acqfn)
         t0 = time.time()
         chipnames,imgs,phdr,biases,_,_ = assemble_full_frames(acqfn, fit_exp=False)
         t1 = time.time()
@@ -145,7 +153,7 @@ class IbisEtc(object):
         self.acq_exptime = float(phdr['GEXPTIME'])
         self.expnum = int(phdr['EXPNUM'])
         self.filt = phdr['FILTER']
-        print('Expnum', self.expnum, 'Filter', self.filt)
+        self.loginfo('Expnum %i, Filter %s' % (self.expnum, self.filt))
 
         if 'RA' in roi_settings and 'dec' in roi_settings and roi_settings['RA'] is not None:
             ra = float(roi_settings['RA'])
@@ -160,7 +168,7 @@ class IbisEtc(object):
         if 'airmass' in roi_settings:
             self.airmass = float(roi_settings['airmass'])
         else:
-            print('Warning: airmass not known')
+            self.loginfo('Warning: airmass not known')
             self.airmass = 1.
 
         self.chipnames = chipnames
@@ -187,7 +195,7 @@ class IbisEtc(object):
                     continue
                 axyfn = os.path.join(self.procdir, '%s-acq-%s.axy' % (self.expnum, chip))
                 if os.path.exists(axyfn):
-                    print('Exists:', axyfn, '-- assuming it will not solve')
+                    self.loginfo('Exists: %s -- assuming it will not solve' % axyfn)
                     continue
             else:
                 self.wcschips.append(chip)
@@ -201,7 +209,7 @@ class IbisEtc(object):
             hdr['BIAS_L'] = l
             hdr['BIAS_R'] = r        
             fitsio.write(imgfn, img, header=hdr, clobber=True)
-            print('Wrote', imgfn)
+            self.loginfo('Wrote %s' % imgfn)
             imgfns[chip] = imgfn
     
             if self.astrometry_net:
@@ -236,13 +244,13 @@ class IbisEtc(object):
             t0 = time.time()
             res = mp.map(run_command, [c for c,_,_ in commands_to_run])
             t1 = time.time()
-            print('Got astrometry.net return values:', res)
-            print('Runtime: %.3f sec' % (t1-t0))
+            self.logdebug('Got astrometry.net return values: %s, runtime: %.3f sec' %
+                          (res, t1-t0))
         else:
             for cmd,_,_ in commands_to_run:
-                print(cmd)
+                self.logdebug(cmd)
                 rtn = os.system(cmd)
-                print('rtn:', rtn)
+                self.logdebug('Return value: %i' % rtn)
 
         for _,wcsfn,chip in commands_to_run:
             if self.astrometry_net and os.path.exists(wcsfn):
@@ -255,7 +263,7 @@ class IbisEtc(object):
         flatmap = {}
         flatfn = os.path.join('guideflats-v2', 'flat-%s.fits' % self.filt.lower())
         if os.path.exists(flatfn):
-            print('Reading flats from', flatfn)
+            self.loginfo('Reading flats from %s' % flatfn)
             chipnames,flats,_,_,_,_ = assemble_full_frames(flatfn,
                                                subtract_bias=False, fit_exp=False)
             #trim_first=False, trim_last=False)
@@ -264,9 +272,8 @@ class IbisEtc(object):
         t0 = time.time()
         self.chipmeas = {}
         for chip in chipnames:
-            print('Measuring', chip)
             imgfn = imgfns[chip]
-            print('Using image file', imgfn)
+            self.loginfo('Measuring chip %s using image file %s' % (chip, imgfn))
             # if chip in self.wcschips:
             #     wcs = Sip(wcsfns[chip])
             #     p = ps1cat(ccdwcs=wcs)
@@ -283,7 +290,7 @@ class IbisEtc(object):
                     GS1 = (-0.7019,  0.7393),
                     GS2 = (-0.5464,  0.9033),)
                 dra,ddec = chip_offsets[chip]
-                print('Dead-reckoning WCS')
+                self.loginfo('Dead-reckoning WCS')
                 wcs = Tan(ra + dra, dec + ddec, 1024.5, 1024.5,
                           0., 7.3e-5, -7.3e-5, 0., 2048.0, 2048.0)
             elif self.astrometry_net and chip in self.wcschips:
@@ -294,7 +301,7 @@ class IbisEtc(object):
             ext = 0
             meas = DECamGuiderMeasurer(imgfn, ext, nominal_cal)
             meas.airmass = self.airmass
-            print('Airmass', self.airmass)
+            self.loginfo('Airmass %s' % self.airmass)
             meas.wcs = wcs
             # max astrometric shift, in arcsec (assume astrometry.net solution is pretty good)
             #meas.maxshift = 5.
@@ -315,7 +322,7 @@ class IbisEtc(object):
             R = meas.run(**kw)
             self.chipmeas[chip] = (meas, R)
         t1 = time.time()
-        print('Measuring chips took %.3f sec' % (t1-t0))
+        self.loginfo('Measuring chips took %.3f sec' % (t1-t0))
 
         zp0 = None
         kx = None
@@ -324,7 +331,7 @@ class IbisEtc(object):
         for chip in self.wcschips:
             meas,R = self.chipmeas[chip]
             if not 'refstars' in R:
-                print('No reference stars in chip', chip)
+                self.loginfo('No reference stars in chip %s' % chip)
                 continue
             ref = R['refstars']
             apflux = R['apflux']
@@ -337,19 +344,18 @@ class IbisEtc(object):
                                                   primhdr=R['primhdr'])
                 kx = nominal_cal.fiducial_exptime(self.filt).k_co
         if len(dmags) == 0:
-            print('No matched stars found in any of the guide chips')
+            self.loginfo('No matched stars found in any of the guide chips')
             return
         dmags = np.hstack(dmags)
         seeings = np.hstack(seeings)
         seeing = np.median(seeings)
         zpt = -np.median(dmags)
         self.transparency = 10.**(-0.4 * (zp0 - zpt - kx * (self.airmass - 1.)))
-        print()
-        print('All chips:')
-        print('Zeropoint:     %.3f   (with %i stars)' % (zpt, len(dmags)))
-        print('Nom Zeropoint: %.3f' % zp0)
-        print('Transparency:  %.3f' % self.transparency)
-        print('Seeing:        %.2f arcsec' % seeing)
+        self.loginfo('All chips:')
+        self.loginfo('Zeropoint:     %.3f   (with %i stars)' % (zpt, len(dmags)))
+        self.loginfo('Nom Zeropoint: %.3f' % zp0)
+        self.loginfo('Transparency:  %.3f' % self.transparency)
+        self.loginfo('Seeing:        %.2f arcsec' % seeing)
         del dmags
         #self.transmission = 10.**(-0.4 * (zp0 - zpt))
         #print('Transmission:  %.3f' % self.transmission)
@@ -507,9 +513,9 @@ class IbisEtc(object):
         # [1] is the first ROI, with funny exposure properties
         # [2] is the firt normal ROI
         if roi_num == 1:
-            print('Skipping first ROI image')
             phdr = fitsio.read_header(roi_filename)
             troi = datetime_from_header(phdr)
+            self.loginfo('Skipping first ROI image: %s.  Date in header: %s' % (roi_filename, troi))
             self.first_roi_datetime = troi
             return
 
@@ -657,14 +663,14 @@ class IbisEtc(object):
                     continue
                 x,y = roi[chip]
                 dists = np.hypot(refstars.x-1 - x, refstars.y-1 - y)
-                print('Chip', chip, ': min dist from ROI center to a ref star:', min(dists), 'pix')
+                self.loginfo('Chip %s: min dist from ROI center to a ref star: %.1f pix' %
+                          (chip, min(dists)))
                 i = np.argmin(dists)
                 if dists[i] >= 5:
-                    print('Chip', chip,
-                          ': Closest reference star is %.1f pix from ROI center -- too far away.' %
-                          dists[i])
+                    self.loginfo('Chip %s: Closest reference star is %.1f pix from ROI center -- too far away.' %
+                            (chip, dists[i]))
                     continue
-                print('Chip', chip, ': ref star mag is', refstars.mag[i])
+                self.loginfo('Chip %s: ref star mag is %.2f' % (chip, refstars.mag[i]))
                 self.roi_ref_stars[chip] = refstars[np.array([i])]
                 self.roi_star_mags[chip] = refstars.mag[i]
 
@@ -678,6 +684,7 @@ class IbisEtc(object):
 
         if first_time:
             self.roi_exptime = float(phdr['GEXPTIME'])
+            self.loginfo('ROI exposure time: %.3f sec' % self.roi_exptime)
         else:
             assert(self.roi_exptime == float(phdr['GEXPTIME']))
         troi = datetime_from_header(phdr)
@@ -980,7 +987,7 @@ class IbisEtc(object):
                     self.starchips.append(chip)
                     self.roiflux[chip] = flux
                 else:
-                    print('Warning: chip', chip, 'got small tractor flux %.1f - ignoring' % flux)
+                    self.loginfo('Warning: chip %s got small tractor flux %.1f - ignoring' % (chip, flux))
 
         if self.debug:
             plt.suptitle('Expnum %i guider frame %i' % (self.expnum, roi_num))
@@ -1188,7 +1195,7 @@ class IbisEtc(object):
                                troi, roi_num, expfactor, seeing, isee, trans, itran,
                                skybr, isky, ispeed, efftime, exptime)
             except Exception as e:
-                print('Database insertion failed.  Skipping further database transactions.')
+                self.loginfo('Database insertion failed.  Skipping further database transactions.')
                 import traceback
                 traceback.print_exc()
                 self.db = None
@@ -2998,9 +3005,16 @@ class EtcFileWatcher(NewFileWatcher):
         self.stop_efftime = None
         self.stopped_exposure = False
         self.db = db
+        self.logger = logging.getLogger('ibis_etc.EtcFileWatcher')
 
     def filter_backlog(self, backlog):
         return []
+
+    def loginfo(self, *args, **kwargs):
+        self.logger.info(*args, **kwargs)
+
+    def logdebug(self, *args, **kwargs):
+        self.logger.debug(*args, **kwargs)
 
     # quieter
     def log(self, *args, **kwargs):
@@ -3025,9 +3039,12 @@ class EtcFileWatcher(NewFileWatcher):
             if latest is None or t < latest:
                 newestfile = fn
                 latest = t
+        self.logdebug('get_newest_files: newfiles %s, returning %s' %
+                      (newfiles, newestfile))
         return newestfile
 
     def start_exposure(self, path, expnum):
+        self.loginfo('start_exposure: expnum %i' % expnum)
         dirnm = os.path.dirname(path)
         roi_fn = os.path.join(dirnm, 'roi_settings_%08i.dat' % expnum)
         print('Looking for ROI settings file:', roi_fn)
@@ -3070,6 +3087,7 @@ class EtcFileWatcher(NewFileWatcher):
         #etc.stop_efftime = 30.
 
     def process_file(self, path):
+        self.loginfo('process_file: %s' % path)
         #print('process_file:', path)
         fn = os.path.basename(path)
         dirnm = os.path.dirname(path)
@@ -3103,7 +3121,10 @@ class EtcFileWatcher(NewFileWatcher):
                 if self.last_roi > 0:
                     if (expnum, self.last_roi + 1) in self.out_of_order:
                         # last_roi + 1 is in the backlog.
-                        pass
+                        print('The next ROI frame (%i) is in the backlog' % (self.last_roi+1))
+                        # We put this one in the backlog - the correct one from the
+                        # backlog should get processed in the heartbeat().
+                        return False
                     else:
                         # Check if the following N roi frames have appeared on disk
                         next_found = True
@@ -3155,9 +3176,9 @@ class EtcFileWatcher(NewFileWatcher):
     def stop_exposure(self):
         if self.remote_client is not None:
             if self.stopped_exposure:
-                print('We already stopped this exposure, don\'t stop again')
+                self.loginfo('We already stopped this exposure, do not stop again')
             else:
-                print('Stopping exposure!')
+                self.loginfo('Stopping exposure!')
                 #self.remote_client.stopexposure()
                 self.remote_client.stoprequested()
                 self.stopped_exposure = True
@@ -3167,8 +3188,8 @@ class EtcFileWatcher(NewFileWatcher):
         if not len(self.out_of_order):
             return
 
-        print('Checking backlog... on expnum %s, last ROI was %s' %
-              (self.expnum, self.last_roi))
+        self.loginfo('Checking backlog... on expnum %s, last ROI was %s' %
+                     (self.expnum, self.last_roi))
         # fixme -- we could just check the dict for the expnum,roi we're looking forw,
         # rather than iterating through it - but it's kind of nice to print out the
         # backlog
@@ -3234,6 +3255,7 @@ if __name__ == '__main__':
                         help='Astrometry.net config file, default %(default)s')
     parser.add_argument('--batch', default=False, action='store_true', help='Batch mode')
     parser.add_argument('--db', default=False, action='store_true', help='Store results in db')
+    parser.add_argument('--verbose', default=False, action='store_true', help='Verbose logging')
 
     opt = parser.parse_args()
 
@@ -3259,6 +3281,13 @@ if __name__ == '__main__':
             print('  pg_ctl start')
             print()
             sys.exit(0)
+
+    if not opt.verbose:
+        lvl = logging.INFO
+    else:
+        lvl = logging.DEBUG
+    format = '[%(asctime)s %(funcName)s (%(filename)s:%(lineno)d) %(message)s'
+    logging.basicConfig(level=lvl, format=format, stream=sys.stdout)
 
     if opt.batch:
         batch_main(**kw)
