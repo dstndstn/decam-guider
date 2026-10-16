@@ -34,7 +34,7 @@ from photutils.aperture import CircularAperture, aperture_photometry
 #print('Reading SFD maps, complaints about END on the following lines are expected.')
 #sfd = SFDMap()
 
-import line_profiler
+#import line_profiler
 
 # Remove a V-shape pattern (MAGIC number)
 guider_horiz_slope = 0.00168831
@@ -495,7 +495,7 @@ class IbisEtc(object):
             plt.title('Expnum %i' % self.expnum)
             self.ps.savefig()
 
-    @line_profiler.profile
+    #@line_profiler.profile
     def process_roi_image(self, roi_settings, roi_num, roi_filename,
                           debug=False, mp=None):
         if mp is None:
@@ -1569,7 +1569,7 @@ def process_amp(X):
             ampimg.astype(np.float32), data_level)
 
 
-@line_profiler.profile
+#@line_profiler.profile
 def assemble_full_frames(fn, drop_bias_rows=48, fit_exp=True, ps=None,
                          subtract_bias=True, trim_first=True, trim_last=True, mp=None):
     F = fitsio.FITS(fn, 'r')
