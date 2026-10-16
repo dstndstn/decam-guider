@@ -3025,10 +3025,11 @@ class EtcFileWatcher(NewFileWatcher):
             newfiles = self.get_new_files()
         if len(newfiles) == 0:
             return None
-        # Take the one with the newest timestamp.
-        # --> OLDEST instead here
-        latest = None
-        newestfile = None
+        # This function returns the filename we should process first.
+        # We want the *oldest* file (despite the function name);
+        # we'll work through them in file timestamp order
+        oldest_timestamp = None
+        oldest_filename = None
         for fn in newfiles:
             try:
                 st = os.stat(fn)
@@ -3036,12 +3037,12 @@ class EtcFileWatcher(NewFileWatcher):
                 print('Failed to stat filename', fn, ':', e)
                 continue
             t = st.st_mtime
-            if latest is None or t < latest:
-                newestfile = fn
-                latest = t
+            if oldest_timestamp is None or t < oldest_timestamp:
+                oldest_filename = fn
+                oldest_timestamp = t
         self.logdebug('get_newest_files: newfiles %s, returning %s' %
-                      (newfiles, newestfile))
-        return newestfile
+                      (newfiles, oldest_filename))
+        return oldest_filename
 
     def start_exposure(self, path, expnum):
         self.loginfo('start_exposure: expnum %i' % expnum)
