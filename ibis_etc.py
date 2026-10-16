@@ -3097,7 +3097,7 @@ class EtcFileWatcher(NewFileWatcher):
         if fn == 'quit':
             sys.exit(0)
         if not (fn.startswith('DECam_guider_') and fn.endswith('.fits.gz')):
-            print('Unexpect filename pattern:', fn)
+            print('Unexpected filename pattern:', fn)
             return False
         trim = fn[len('DECam_guider_'):]
         trim = trim[:-len('.fits.gz')]
@@ -3138,6 +3138,9 @@ class EtcFileWatcher(NewFileWatcher):
                                   (Nnext, self.last_roi+1))
                             self.last_roi += 1
                         return False
+                else:
+                    # Initial backlog
+                    return False
             # Catch exceptions and move on the next ROI frame!!
             try:
                 self.etc.process_roi_image(self.roi_settings, roinum, path, mp=self.mp)
