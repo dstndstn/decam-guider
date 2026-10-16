@@ -3286,7 +3286,7 @@ if __name__ == '__main__':
         lvl = logging.INFO
     else:
         lvl = logging.DEBUG
-    format = '[%(asctime)s %(funcName)s (%(filename)s:%(lineno)d) %(message)s'
+    format = 'L %(asctime)s %(funcName)s (%(filename)s:%(lineno)d) %(message)s'
     logging.basicConfig(level=lvl, format=format, stream=sys.stdout)
 
     if opt.batch:
